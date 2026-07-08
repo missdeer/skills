@@ -1,0 +1,1 @@
+D:/Shareware/notebooklm-client/SKILL.md

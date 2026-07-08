@@ -1,0 +1,4 @@
+interface:
+  display_name: "CCTV H5e Downloader"
+  short_description: "Download and decrypt CCTV H5e videos"
+  default_prompt: "Use $cctv-h5e-download to download this CCTV video URL into a playable MP4."
