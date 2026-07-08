@@ -17,7 +17,6 @@ Codex CLI 的 skill 集合，每个子目录是一个可被 codex 识别的 skil
 | [notebooklm](notebooklm/SKILL.md) | Google NotebookLM 自动化：播客 / 报告 / 幻灯片 / 深研 |
 | [pkg-go-dev](pkg-go-dev/SKILL.md) | 查询 pkg.go.dev v1beta REST API 拿 Go 包文档 / 版本 / CVE |
 | [cctv-h5e-download](cctv-h5e-download/SKILL.md) | 下载并解密 CCTV/CNTV H5e HLS 加密流为本地 MP4 |
-| [codex-primary-runtime](codex-primary-runtime/) | Codex 作为 primary runtime 的占位配置 |
 
 ## 结构约定
 
