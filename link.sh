@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        if command -v pwsh >/dev/null 2>&1; then
+            PS=pwsh
+        else
+            PS=powershell
+        fi
+        exec "$PS" -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$SCRIPT_DIR/link.ps1" 2>/dev/null || echo "$SCRIPT_DIR/link.ps1")"
+        ;;
+esac
+
 SRC_DIR="${HOME}/.codex/skills"
 if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
     CLAUDE_DIR="${CLAUDE_CONFIG_DIR}/skills"
@@ -9,29 +22,12 @@ else
 fi
 GEMINI_DIR="${HOME}/.gemini/antigravity-cli/skills"
 
-case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) IS_WIN=1 ;;
-    *) IS_WIN=0 ;;
-esac
-
-to_win_path() {
-    if command -v cygpath >/dev/null 2>&1; then
-        cygpath -w "$1"
-    else
-        echo "$1" | sed -e 's|^/\([a-zA-Z]\)/|\1:\\|' -e 's|/|\\|g'
-    fi
-}
-
 make_link() {
     local src="$1" dst="$2"
     if [ -e "$dst" ] || [ -L "$dst" ]; then
         rm -rf "$dst"
     fi
-    if [ "$IS_WIN" = 1 ]; then
-        cmd //c mklink /J "$(to_win_path "$dst")" "$(to_win_path "$src")" >/dev/null
-    else
-        ln -sfn "$src" "$dst"
-    fi
+    ln -sfn "$src" "$dst"
     echo "linked: $dst -> $src"
 }
 

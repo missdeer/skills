@@ -28,3 +28,21 @@ Codex CLI 的 skill 集合，每个子目录是一个可被 codex 识别的 skil
 ├── references/       # 可选：静态参考资料
 └── agents/           # 可选：子 agent 定义
 ```
+
+## 安装到 Claude / Gemini
+
+将本目录下的所有 skill 以目录联接（Windows junction / POSIX symlink）的方式挂到 `~/.claude/skills/` 和 `~/.gemini/antigravity-cli/skills/`。若设置了 `CLAUDE_CONFIG_DIR`，Claude 路径会改成 `$CLAUDE_CONFIG_DIR/skills/`。
+
+**Linux / macOS**
+
+```bash
+~/.codex/skills/link.sh
+```
+
+**Windows**
+
+```powershell
+pwsh -File $HOME\.codex\skills\link.ps1
+```
+
+在 Git Bash / MSYS / Cygwin 下也可直接跑 `link.sh`，它会自动转发到 `link.ps1`。重复执行会先删除旧链接再重建，可安全重跑。
