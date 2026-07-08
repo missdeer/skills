@@ -28,7 +28,7 @@ This is a Codex CLI skill collection. Each subdirectory is a skill that Codex ca
 └── agents/           # optional: sub-agent definitions
 ```
 
-## Install To Claude / Gemini
+## Install To Claude / Antigravity
 
 Mount all skills in this directory into `~/.claude/skills/` and `~/.gemini/antigravity-cli/skills/` using directory links (Windows junctions or POSIX symlinks). If `CLAUDE_CONFIG_DIR` is set, the Claude path changes to `$CLAUDE_CONFIG_DIR/skills/`.
 
