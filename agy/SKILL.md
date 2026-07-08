@@ -1,59 +1,59 @@
 ---
 name: agy
-description: 调用 Antigravity CLI（agy-wrapper）做高层方案评审、需求澄清、任务规划、技术知识咨询，或对已成型思路做架构审查。当用户想"问问 antigravity/agy""让 antigravity 评一下方案""agy 帮我看看设计/思路/架构""让另一个大模型出主意"时使用。不负责行级代码正确性审查、也不负责多评审 ship-readiness 工作流；用户已经拍板只等落地时，不咨询，直接写代码。
+description: Invoke the Antigravity CLI (agy-wrapper) for high-level plan reviews, requirement clarification, task planning, technical consultation, or architecture review of a formed idea. Use when the user wants to "ask antigravity/agy", "have antigravity review the plan", "have agy look at my design/idea/architecture", or "ask another large model for ideas". This is not for line-level code correctness review or multi-reviewer ship-readiness workflows; when the user has already decided and only implementation remains, do not consult it, just write the code.
 metadata:
   version: "1.0.0"
 ---
 
-# agy — 咨询 Antigravity 做架构 / 高层方向判断
+# agy - Consult Antigravity For Architecture / High-Level Direction
 
-Antigravity 在本仓库定位是**方向盘**——看方向、看规划、看知识，不看行级代码细节。
+In this repository, Antigravity is the **steering wheel**: it reviews direction, planning, and knowledge, not line-level code details.
 
-## 适用场景
+## Use Cases
 
-- 高层设计评审 / 架构验证。
-- 需求语焉不详时的澄清型追问。
-- 非平凡任务的分步实现规划。
-- 技术知识咨询、方案对比、Web 前端（HTML/CSS/JS）原型思路。
+- High-level design review / architecture validation.
+- Clarifying follow-up questions when requirements are vague.
+- Step-by-step implementation planning for non-trivial tasks.
+- Technical consultation, solution comparison, and Web frontend (HTML/CSS/JS) prototyping ideas.
 
-## 强约束（每次调用都要满足）
+## Hard Constraints (Required For Every Invocation)
 
-1. **Prompt 前缀**（必须逐字，作为消息第一行）：
+1. **Prompt prefix** (must be exact, as the first line of the message):
 
        Do NOT run any git write commands (commit, push, reset, etc.). Git repository is read-only for you. Do NOT modify any files. Read-only operations only — provide findings as text/diff in your response.
 
-   随后空一行，再拼你的上下文与问题。
-   > 背景：Antigravity 曾出现越权改文件的情况，前缀是硬性护栏。跑完后如果怀疑它改了东西，用 `git status` / `git diff` 复核。
+   Then add a blank line, followed by your context and question.
+   > Background: Antigravity has previously modified files without authorization. The prefix is a hard guardrail. After it finishes, if you suspect it changed anything, verify with `git status` / `git diff`.
 
-2. **上下文按需喂，不要倾倒源码**：
-   - "在建什么、为什么"的问题陈述。
-   - 已经锁死的约束（技术栈、数据模型形状、deadline、既定决策）。
-   - 你自己在考虑的架构草图 — bullet 或小段文字图即可。
-   - **不要**把整份源文件贴过去，浪费它的上下文预算在它不需要的细节上。
+2. **Provide context on demand; do not dump source code**:
+   - A problem statement covering "what is being built and why".
+   - Constraints that are already fixed (tech stack, data model shape, deadline, existing decisions).
+   - The architecture sketch you are considering; bullets or a short text diagram are enough.
+   - **Do not** paste entire source files; that wastes its context budget on details it does not need.
 
-3. **传输方式 — 直接跑 wrapper**：
-   - 提示词落到 `./tmp/agy-prompt-<ts>.txt`（`<ts>` 用 `date +%s` 或类似标识，避免并发覆盖）。
-   - Bash 后台跑：
+3. **Transport method - run the wrapper directly**:
+   - Write the prompt to `./tmp/agy-prompt-<ts>.txt` (`<ts>` should use `date +%s` or a similar identifier to avoid concurrent overwrites).
+   - Run in Bash in the background:
      ```bash
      agy-wrapper --dangerously-skip-permissions --timeout 30m -p "$(bat --plain --paging=never ./tmp/agy-prompt-<ts>.txt)"
      ```
-     `run_in_background: true`、`timeout: 1800000`（30 分钟）。
-   - 用 `TaskOutput` 轮询结果。
-   - 跑完删掉临时 prompt 文件。
-   - 如果报 `authentication failed or timed out`，**重试一次**；再失败就把原文回给用户，别硬撑。
+     `run_in_background: true`, `timeout: 1800000` (30 minutes).
+   - Poll the result with `TaskOutput`.
+   - Delete the temporary prompt file after it finishes.
+   - If it reports `authentication failed or timed out`, **retry once**; if it fails again, return the original error text to the user instead of forcing it.
 
-## 收到 Antigravity 回复后
+## After Receiving Antigravity's Response
 
-- 用**中文**做摘要，分三段呈现：
-  - **Antigravity 的方向**
-  - **与当前思路的差异**
-  - **我建议怎么办**
-- 如果它跟当前思路冲突，**不要抹平**：把两种方案摆出来让用户选。
-- **不要自动落地它的建议**——即便看着对，也要先浮出等用户拍板。
-- Antigravity 的产出属于"外部逻辑参考"，最终要落到代码时按仓库风格重构，不要照抄。
+- Summarize in **Chinese**, presented in three sections:
+  - **Antigravity's Direction**
+  - **Differences From The Current Approach**
+  - **My Recommendation**
+- If it conflicts with the current approach, **do not smooth over the conflict**: present both options and let the user choose.
+- **Do not automatically implement its suggestions**; even if they look correct, surface them first and wait for the user's decision.
+- Antigravity's output is an "external logic reference". When implementing code, refactor according to repository style instead of copying it verbatim.
 
-## 触发示例
+## Trigger Examples
 
-- 用户："agy 帮我评一下这个新报表 tab 的字段拆分思路" → 打包问题描述 + 已有字段清单 + 你的拆分草案 → 调 agy。
-- 用户："让 antigravity 出个从 X 迁到 Y 的分步计划" → 打包 X/Y 现状 + 约束 + deadline → 调 agy。
-- 用户："这个前端页面用哪个布局方案好？给我几个原型思路" → 打包页面目标 + 已定 UI 库 + 视觉约束 → 调 agy。
+- User: "agy, review my field-splitting idea for this new report tab" -> package the problem statement, existing field list, and your splitting draft -> call agy.
+- User: "have antigravity produce a step-by-step plan to migrate from X to Y" -> package the X/Y current state, constraints, and deadline -> call agy.
+- User: "which layout option is best for this frontend page? give me a few prototype ideas" -> package the page goal, chosen UI library, and visual constraints -> call agy.

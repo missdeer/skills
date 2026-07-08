@@ -55,7 +55,7 @@ jira transitions SHELFECOMM-1                # list available next states
 jira transition SHELFECOMM-1 31              # move to transition id 31
 jira projects                                # list visible projects
 jira meta SHELFECOMM                         # list issue types in a project
-jira create SHELFECOMM 任务 '修登录跳转 bug' \
+jira create SHELFECOMM Task 'Fix login redirect bug' \
     --assignee=missdeer \
     --text-file=tmp/issue-desc.txt           # see "Creating tickets" below
 jira assign SHELFECOMM-6 missdeer            # (re)assign; use "-1" for Automatic, "" to unassign
@@ -83,7 +83,7 @@ Run `jira --help` for the full command and flag reference.
 | `transition <KEY> <id>` | `POST /issue/{KEY}/transitions` | Apply transition id (get id from `transitions`) |
 | `projects` | `GET /project` | Visible projects |
 | `meta <PROJECT_KEY>` | `GET /issue/createmeta?projectKeys=…&expand=projects.issuetypes` | List issue types (id + name) for a project — call before `create` |
-| `create <PROJECT> <ISSUETYPE> <SUMMARY>` | `POST /issue` | Create a new issue. `ISSUETYPE` accepts either numeric id (e.g. `10002`) or name (`Task` / `任务`). Optional flags: `--assignee=<name>`, `--description=<short>`, `--text-file=<path>` (UTF-8 description, recommended for CJK), `--priority=<name>`, `--labels=a,b,c`, `--parent=<KEY>`. `--description-file=<path>` is a deprecated alias of `--text-file` |
+| `create <PROJECT> <ISSUETYPE> <SUMMARY>` | `POST /issue` | Create a new issue. `ISSUETYPE` accepts either numeric id (e.g. `10002`) or name (`Task`). Optional flags: `--assignee=<name>`, `--description=<short>`, `--text-file=<path>` (UTF-8 description, recommended for CJK), `--priority=<name>`, `--labels=a,b,c`, `--parent=<KEY>`. `--description-file=<path>` is a deprecated alias of `--text-file` |
 | `assign <KEY> <USERNAME>` | `PUT /issue/{KEY}/assignee` | (Re)assign. Pass `-1` for "Automatic"; empty string to unassign |
 | `linktypes` | `GET /issueLinkType` | List link type names (`Blocks`, `Duplicate`, …) — call before `link` |
 | `link <FROM> <TYPE> <TO>` | `POST /issueLink` | Link two issues. Optional `--comment=<text>` (or `--text-file=PATH`) attaches a note |
@@ -119,7 +119,7 @@ Run `jira --help` for the full command and flag reference.
 
 Recipe:
 
-1. `meta <PROJECT>` to see the project's issue types (id + name). On `SHELFECOMM` they are 任务 / 故障 / 故事 / 子任务 / Epic.
+1. `meta <PROJECT>` to see the project's issue types (id + name). On `SHELFECOMM` they are Task / Bug / Story / Sub-task / Epic.
 2. Put the **description** in a UTF-8 file and pass `--text-file=<path>` — this is the one and only safe path for CJK content (see "UTF-8 / Windows gotcha" below). For pure ASCII bodies, `--description='…'` inline is fine. `--description-file=<path>` still works as a deprecated alias.
 3. Call `create`. The response is the standard `{id, key, self}` triple — surface the `key` (e.g. `SHELFECOMM-6`) back to the user along with the browse URL `https://jira.ismisv.com/browse/<KEY>`.
 
@@ -139,7 +139,7 @@ and `assign` — no shell-codepage workaround needed.
 
 For `raw POST/PUT` with CJK payloads, both forms work:
 
-- `jira raw POST /issue '{"fields":{"summary":"修 bug",…}}'` — literal string.
+- `jira raw POST /issue '{"fields":{"summary":"Fix bug",…}}'` — literal string.
 - `jira --text-file=tmp/payload.json raw POST /issue` — file bytes verbatim (preferred for non-trivial payloads). The legacy `raw POST /issue @tmp/payload.json` form still works but is deprecated.
 
 ## Attachments

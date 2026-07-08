@@ -1,30 +1,30 @@
 ---
 name: audit
-description: 用 Codex CLI 对当前分支的待提交 diff 或 branch-vs-master diff 做单次结构化代码 review，输出 5 类问题（正确性 / 边界 / 安全 / 兼容性 / 编码规范）并按 必修/建议修/吹毛求疵 归类。当用户说"审一下当前改动""audit 一下""过一遍待提交的改动看看有没有问题""扫一下 diff"时使用。单次 review，不做 fix-loop。可选聚焦指令（如"只看 SQL""重点看错误处理""忽略测试文件"）通过 arguments 透传。
+description: Use Codex CLI to perform a single structured code review of the current branch's pending diff or branch-vs-master diff. Output five issue categories (correctness / edge cases / security / compatibility / coding standards) and classify them as must-fix / should-fix / nit. Use when the user says "review the current changes", "audit this", "go over the pending changes for issues", or "scan the diff". This is a single review, not a fix loop. Optional focus instructions (such as "only look at SQL", "focus on error handling", or "ignore test files") are passed through via arguments.
 metadata:
   version: "1.0.0"
 ---
 
-# audit — 让 Codex 对 pending diff 做单次结构化 review
+# audit - Have Codex Perform A Single Structured Review Of A Pending Diff
 
-单次 review、单个审阅者、不改代码、不循环。目标是尽快出一份"有哪些问题、多严重"的清单，交给用户判断。
+Single review, single reviewer, no code changes, no loop. The goal is to quickly produce a list of "what issues exist and how severe they are" for the user to judge.
 
-## Step 1 — 决定 review scope
+## Step 1 - Decide Review Scope
 
-审阅者会自己跑 git 命令拿 diff（step 3 里说明），本 skill 只负责决定跑哪条命令。
+The reviewer will run git commands to obtain the diff itself (described in step 3). This skill only decides which command to run.
 
-- 先 `git status` 看仓库状态。
-- 工作区或索引有改动 → scope 命令 = `git diff HEAD`（一并覆盖已 staged + unstaged）。
-- 工作区干净 → scope 命令 = `git diff master...HEAD`，并向用户说明这是 **branch-vs-master** review，不是待提交改动 review。
-- 把选中的命令称为 `<DIFF_CMD>`，代入 Step 2 消息。**不要**把 diff 内容塞进 prompt，让审阅者自己跑。
+- First run `git status` to inspect repository state.
+- If the working tree or index has changes -> scope command = `git diff HEAD` (covers both staged and unstaged changes).
+- If the working tree is clean -> scope command = `git diff master...HEAD`, and tell the user this is a **branch-vs-master** review, not a pending-changes review.
+- Refer to the selected command as `<DIFF_CMD>` and substitute it into the Step 2 message. **Do not** put the diff content into the prompt; let the reviewer run it.
 
-## Step 2 — 组装消息
+## Step 2 - Assemble The Message
 
-`$ARGUMENTS` 里若带聚焦指令，原样透传（可为空）。消息必须以下面这一行开头，然后空一行，再拼 body：
+If `$ARGUMENTS` contains focus instructions, pass them through verbatim (may be empty). The message must start with the following line, then a blank line, then the body:
 
     Execute directly without asking for confirmation. Do not repeat or echo the request back.
 
-body：
+Body:
 
 ```
 Review the pending diff in this repo. First obtain the diff yourself by running (read-only):
@@ -39,20 +39,20 @@ Do not ask me to paste it; run the command and review its output. The repo's cod
 Focus instruction from user (may be empty): <ARGS>
 ```
 
-## Step 3 — 跑 Codex
+## Step 3 - Run Codex
 
-- 提示词落到 `./tmp/audit-prompt-<ts>.txt`（`<ts>` = `date +%s` 或类似标识，防并发覆盖）。
-- Bash 后台跑：
+- Write the prompt to `./tmp/audit-prompt-<ts>.txt` (`<ts>` = `date +%s` or a similar identifier to avoid concurrent overwrites).
+- Run in Bash in the background:
   ```bash
   codex exec -s read-only --skip-git-repo-check "$(bat --plain --paging=never ./tmp/audit-prompt-<ts>.txt)"
   ```
-  `run_in_background: true`、`timeout: 1800000`（30 分钟）。
-- Codex 在仓库根跑，`<DIFF_CMD>` 会正常解析；`git diff` 在 `read-only` sandbox 下允许。
-- 用 `TaskOutput` 轮询结果，跑完删掉临时 prompt 文件。
+  `run_in_background: true`, `timeout: 1800000` (30 minutes).
+- Codex runs at the repository root, so `<DIFF_CMD>` will resolve normally; `git diff` is allowed in the `read-only` sandbox.
+- Poll the result with `TaskOutput`, and delete the temporary prompt file after it finishes.
 
-## Step 4 — 汇报
+## Step 4 - Report
 
-- 用**中文**汇总，按严重程度分三类：**必修 / 建议修 / 吹毛求疵**。
-- 每条附 `file:line` 定位与一句话理由。
-- **不要自动落地修复**——只列出、交给用户决定。
-- 如果 Codex 返回空或"looks good"，如实说，不要为了"显得认真"编问题。
+- Summarize in **Chinese**, grouped by severity into three categories: **must-fix / should-fix / nit**.
+- Include a `file:line` location and a one-sentence rationale for each item.
+- **Do not automatically implement fixes**; only list them and let the user decide.
+- If Codex returns nothing or "looks good", say so truthfully. Do not invent issues to "look thorough".

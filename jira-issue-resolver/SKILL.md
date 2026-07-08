@@ -1,197 +1,197 @@
 ---
 name: jira-issue-resolver
-description: JIRA issue 端到端解决工作流。触发形如 "resolve JIRA XXXX-nn"、"解决 XXXX-nn"、"处理 XXXX-nn"、贴 jira.ismisv.com/browse/ URL 等意图。串起 DAG 定根 → 出方案 → /review-plan → 附方案 → 写码+测试 → /review → /commit → 回写 JIRA 的完整闭环，一次运行只处理一个 issue。用户故事无子任务时先拆再落地第一个子任务；父任务子任务全完成时走收尾捷径。
+description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root -> producing a plan -> /review-plan -> attaching the plan -> coding and testing -> /review -> /commit -> writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
 metadata:
   version: "1.1.0"
 ---
 
 # jira-issue-resolver
 
-指导 agent 按固定流程解决一个 JIRA issue：从解析 issue key 到最终把 commit id 回写 JIRA。**每一阶段都有硬门槛，不通过不进入下一阶段**。
+Guide the agent through a fixed process to resolve one JIRA issue: from parsing the issue key to writing the final commit id back to JIRA. **Every phase has a hard gate; do not enter the next phase unless the current one passes.**
 
-## 触发场景
+## Trigger Scenarios
 
 - "resolve JIRA issue SHELFECOMM-14"
-- "解决 https://jira.ismisv.com/browse/SHELFECOMM-14"
-- "处理 SHELFECOMM-14"、"帮我把 XXXX-nn 修了"
-- 用户贴出 `https://jira.ismisv.com/browse/<KEY>-<N>` 明确要求处理
+- "fix https://jira.ismisv.com/browse/SHELFECOMM-14"
+- "handle SHELFECOMM-14" / "help me fix XXXX-nn"
+- The user pastes `https://jira.ismisv.com/browse/<KEY>-<N>` and clearly asks for it to be handled
 
-只有解析出 issue key（形如 `PROJECT-123`）时才启动本流程。用户只是问 "看下 XXXX-nn 讲什么"、"这单谁负责" 之类的只读查询，直接调 `/jira` skill 单点查询即可，**不要**进入本工作流。
+Start this workflow only when an issue key can be parsed (shape: `PROJECT-123`). If the user is only asking a read-only question such as "what is XXXX-nn about" or "who owns this ticket", call the `/jira` skill for a point query and **do not** enter this workflow.
 
-## 关键不变量（违反则停手）
+## Key Invariants (Stop If Violated)
 
-1. **一次运行只处理一个 issue**：沿 blocks/depends on/subtask 找到最上游的根节点，就它。找到根后不再回头处理其它节点，也不合并处理。若根 issue 是"用户故事"且没有已存在的子任务/关联任务，则本次运行在方案 approved 后先把它拆成多个子任务写回 JIRA，然后**只落地其中第一个子任务**（跑完 code+test+review+commit+JIRA 回写）就结束；剩余子任务和用户故事本身的收尾都留给用户下一次触发本 skill 时处理。
-2. **plan 未 approve 不写代码**：无论 plan 来自 plan mode 还是普通对话，`/multi-agent-review-plan` 未收到 "approved" 之前不允许 Edit/Write 业务代码。
-3. **代码改动必须配套测试**：功能代码写完必须新增或修改对应测试；只改产品代码不改测试直接判定阶段未完成。
-4. **`/multi-agent-review-code` 不收敛不 commit**：`/multi-agent-review-code` 循环里只要 reviewer 还在提新问题就继续修，直到一轮回来没有新问题。旧问题回归也算新问题。
-5. **JIRA 回写用 git commit 真值**：commit id 从 `git log -1 --format=%H` 取，不要凭印象或复用之前的哈希。
-6. **plan 文件必须附到 JIRA**：不是贴正文，而是作为附件（attachment）上传，走 `/jira` skill 的附件接口。
+1. **One run handles only one issue**: follow blocks / depends on / subtask links to find the most upstream root node, and handle only that node. After finding the root, do not go back and handle other nodes, and do not merge multiple issues into one run. If the root issue is a "Story" and has no existing subtasks / linked implementation tasks, then after the plan is approved, split it into multiple subtasks in JIRA and **implement only the first subtask** in this run (code + test + review + commit + JIRA writeback), then stop. Leave the remaining subtasks and the story closeout itself for a later user-triggered run of this skill.
+2. **Do not write code before the plan is approved**: regardless of whether the plan comes from plan mode or normal conversation, do not Edit / Write product code until `/multi-agent-review-plan` has returned "approved".
+3. **Code changes must include matching tests**: after product code is written, add or modify corresponding tests. Changing product code without tests means the phase is incomplete.
+4. **Do not commit until `/multi-agent-review-code` converges**: as long as reviewers raise new issues in the `/multi-agent-review-code` loop, keep fixing and reviewing until a full round returns with no new issues. Reintroduced old issues also count as new issues.
+5. **Use the real git commit value for JIRA writeback**: obtain the commit id from `git log -1 --format=%H`; do not rely on memory or reuse a previous hash.
+6. **The plan file must be attached to JIRA**: do not paste it into the body. Upload it as an attachment through the `/jira` skill's attachment interface.
 
-## 步骤
+## Steps
 
-### 1. 解析 issue key，抓详情
+### 1. Parse The Issue Key And Fetch Details
 
-从用户输入抽出 issue key。URL 形式取 `/browse/` 之后那一段。
+Extract the issue key from the user's input. For URLs, take the segment after `/browse/`.
 
-调用 `/jira` skill：
-- 拉 issue 详情（summary / description / status / issue type / assignee / issuelinks / subtasks）。
-- 特别关注：`issuelinks`（blocks / is blocked by / relates to / depends on）、`subtasks`、`parent`。
+Call the `/jira` skill:
+- Fetch issue details (summary / description / status / issue type / assignee / issuelinks / subtasks).
+- Pay special attention to `issuelinks` (blocks / is blocked by / relates to / depends on), `subtasks`, and `parent`.
 
-如果 issue 已经处于 Closed / Resolved / Done，直接告诉用户已关闭并给状态和最近的 comment 摘要，**不要**再往下走。
+If the issue is already Closed / Resolved / Done, tell the user it is already closed, include the status and a summary of recent comments, and **do not** continue.
 
-### 2. 沿 DAG 找根，锁定要处理的那个
+### 2. Follow The DAG To Find The Root And Lock The Target
 
-构建有向依赖：
-- 若本 issue 有 `is blocked by` / `depends on` 指向的其它 issue —— 那些是"上游"。
-- 若本 issue 是某 parent 的 subtask，parent 不算上游（parent 通常是 tracker，不是 blocker）；但如果 parent 明确要求先做别的 subtask，参照 subtask 顺序。
-- `relates to` 不算强依赖，**不**进入 DAG。
+Build a directed dependency graph:
+- If this issue has `is blocked by` / `depends on` links to other issues, those issues are "upstream".
+- If this issue is a subtask of a parent, the parent is not upstream (the parent is usually a tracker, not a blocker); however, if the parent explicitly requires another subtask first, follow the subtask order.
+- `relates to` is not a hard dependency and **does not** enter the DAG.
 
-递归：对每个上游 issue 也拉一遍详情，看它是否又被别的 issue 阻塞。**只走 open / in-progress 状态的节点**——已 Resolved/Closed 的上游视作已满足，跳过。
+Recurse: fetch details for each upstream issue and check whether it is blocked by other issues. **Only traverse open / in-progress nodes**; treat Resolved / Closed upstream issues as satisfied and skip them.
 
-在剩下的 open 节点里找**入度为 0**（没有仍在 open 的上游）的节点。若有多个，取用户请求的那条链上的那一个（离用户给的 key 最近的根）。**这就是本次要处理的 issue**，记为 `TARGET`。
+Among the remaining open nodes, find nodes with **in-degree 0** (no still-open upstream dependencies). If there are multiple, choose the one on the user's requested chain that is closest to the key the user provided. **This is the issue handled in this run**, recorded as `TARGET`.
 
-告诉用户："你给的 X 依赖 Y（Y 又依赖 Z，Z 是 open 状态的根）→ 本次只处理 Z，完成后本 skill 结束；X 需要下一轮再启动。"如果 `TARGET` 就是用户输入的 key，也明确说 "无未完成上游，直接处理它"。
+Tell the user: "The issue X you provided depends on Y (and Y depends on Z, which is the open root) -> this run will only handle Z and then stop; X requires another run later." If `TARGET` is the user-provided key, explicitly say "There are no unfinished upstream dependencies, so I will handle it directly."
 
-### 2.5 父任务收尾捷径（若适用则短路后续步骤）
+### 2.5 Parent Closeout Shortcut (Short-Circuit Later Steps When Applicable)
 
-**触发条件（全部满足才执行）**：
-- `TARGET` 是父类型 issue（用户故事 / Story，或含子任务的 Task），即它至少有一个 subtask 或至少一条 `is blocked by` / `depends on` 指向别的 issue，且这些下游 issue 都是它的"实现子任务"（不是无关的依赖）。
-- 上述所有子任务 / 关联任务的状态都是 Resolved / Closed / Done。
-- `TARGET` 自身仍是 open（未 Resolved / Closed / Done）。
-- **约定**：父任务不应有独立的工作内容——所有可交付的代码工作都归属子任务。若你发现父任务的 description / 验收标准里还有明显未落地在任何子任务上的功能点，**停手**并告诉用户"父任务似乎还残留独立工作内容 X，需要先补一个子任务再收尾"，让用户决定是补子任务还是把工作明确挂到已有子任务上。
+**Trigger conditions (all must be true)**:
+- `TARGET` is a parent-type issue (Story, or a Task containing subtasks), meaning it has at least one subtask or at least one `is blocked by` / `depends on` link to another issue, and those downstream issues are its "implementation subtasks" rather than unrelated dependencies.
+- All of those subtasks / linked tasks are Resolved / Closed / Done.
+- `TARGET` itself is still open (not Resolved / Closed / Done).
+- **Convention**: parent tasks should not contain independent implementation work. All deliverable code work belongs to subtasks. If the parent description / acceptance criteria still contain obvious functionality that has not landed in any subtask, **stop** and tell the user "the parent appears to still contain independent unfinished work X; add a subtask first before closeout", then let the user decide whether to add a subtask or explicitly attach the work to an existing subtask.
 
-满足时按下列做法收尾（**跳过步骤 3–9，直接进入本节的回写**）：
+When the conditions are met, close out as follows (**skip steps 3-9 and go directly to this section's writeback**):
 
-1. 用 `/jira` skill 汇总所有子任务的 key、状态、以及各自 comment 里记录过的 commit 短哈希（拿不到就再查一遍每个子任务最近一条 comment）。
-2. 在 `TARGET` 上加一条 comment：列出所有子任务 key、commit 短哈希、交付说明；一句话结论"所有子任务已完成，父任务收尾"。
-3. **切状态**：根据 `TARGET` 当前可用 transition，切到合适的下一状态（通常是 "In Review" 或 "Resolved"，取决于团队流程和父任务的定位）；拿不准就问用户。
-4. 直接进入步骤 11 收尾，本次运行结束——**不**触发 plan、code、test、review、commit。
+1. Use the `/jira` skill to summarize every subtask's key, status, and commit short hash recorded in each subtask's comments (if unavailable, inspect each subtask's most recent comment again).
+2. Add a comment to `TARGET`: list all subtask keys, commit short hashes, and delivery notes; conclude in one sentence that all subtasks are complete and the parent is being closed out.
+3. **Transition status**: based on the transitions currently available on `TARGET`, move it to the appropriate next status (usually "In Review" or "Resolved", depending on the team workflow and the parent's role); ask the user if unsure.
+4. Go directly to step 11 for closeout and end this run. **Do not** trigger plan, code, test, review, or commit.
 
-若不满足条件，跳过本节，进入步骤 3。
+If the conditions are not met, skip this section and continue to step 3.
 
-### 3. 出方案（plan mode 或对话式）
+### 3. Produce A Plan (Plan Mode Or Conversational)
 
-自行判断：
-- 变更点清楚、影响范围小 → 直接在对话里写方案。
-- 变更点多、需要探索代码 → 进 plan mode（`EnterPlanMode`）。
-- 拿不准 → 一句话问用户 "要不要我先出方案再动手？"，用户说不用就跳过评审直接进步骤 6（但一般不建议）。
+Decide for yourself:
+- If the change is clear and the impact is small, write the plan directly in the conversation.
+- If there are many changes or code exploration is needed, enter plan mode (`EnterPlanMode`).
+- If unsure, ask the user in one sentence: "Should I produce a plan before implementation?" If the user says no, skip review and go directly to step 6 (generally not recommended).
 
-方案必须包含：
-- 目标（对齐 JIRA issue 的验收标准）
-- 影响的文件 / 模块清单
-- 每步改动的意图
-- 测试策略（新增/修改哪些用例，怎么跑）
-- 风险与回退
+The plan must include:
+- Goal (aligned with the JIRA issue's acceptance criteria)
+- Affected files / modules
+- Intent of each change step
+- Test strategy (which cases to add / modify and how to run them)
+- Risks and rollback
 
-### 4. `/multi-agent-review-plan` 评审循环
+### 4. `/multi-agent-review-plan` Review Loop
 
-**不允许跳过**。写完方案，立刻调 `/multi-agent-review-plan`（该命令会把方案分发给 Codex + AntiGravity 做只读评审）。
+**Do not skip this.** After writing the plan, immediately call `/multi-agent-review-plan` (the command distributes the plan to Codex + AntiGravity for read-only review).
 
-- 收集所有 reviewer 反馈。
-- 合理的问题 → 修方案 → 再跑 `/multi-agent-review-plan`。
-- 直到最新一轮没有新的合理问题（reviewer 明确 approved 或不再提新问题）为止。
+- Collect all reviewer feedback.
+- For reasonable issues: fix the plan, then run `/multi-agent-review-plan` again.
+- Continue until the latest round has no new reasonable issues (reviewers explicitly approve or no longer raise new issues).
 
-**只有 approved 后才能进入步骤 5。**
+**Only after approval may you enter step 5.**
 
-### 4.5 用户故事拆子任务（仅限特定条件）
+### 4.5 Split A Story Into Subtasks (Specific Conditions Only)
 
-**触发条件（全部满足才执行）**：
-- `TARGET.issuetype` 是 "用户故事" / "Story"（同义），且
-- `TARGET.subtasks` 为空、且没有 `is blocked by` / `depends on` 指向的其它任务（也即步骤 2 已判定它是 open 根、无子任务、无下游任务）。
+**Trigger conditions (all must be true)**:
+- `TARGET.issuetype` is "Story" or an equivalent story type, and
+- `TARGET.subtasks` is empty, and there are no `is blocked by` / `depends on` links to other tasks (meaning step 2 has determined it is an open root with no subtasks and no downstream tasks).
 
-若不满足，跳过本步，直接进入步骤 5。
+If the conditions are not met, skip this step and continue directly to step 5.
 
-满足时按下列做法拆分：
+When the conditions are met, split as follows:
 
-1. 依据 approved plan 中"每步改动的意图"和"影响的文件 / 模块清单"，把工作切成 2~N 个相互独立、可单独交付并跑测试的任务。每个任务应聚焦一个可验证的验收点，粒度过大要再切。
-2. 用 `/jira` skill 在 `TARGET` 项目下创建对应数量的子任务（issuetype 通常为 "任务" / "Sub-task"，随项目配置而定，拿不准就问用户），并把每个新任务作为 `TARGET` 的 subtask 或用 `is blocked by` 关联回 `TARGET`。
-3. 每个子任务的 summary 写明它交付的功能片段，description 复制 plan 中对应部分（含验收点、影响文件、测试策略）。
-4. 记录本次生成的子任务 key 列表 `SUBTASKS = [key1, key2, ...]`，顺序按依赖 / 落地顺序排。
-5. 在 `TARGET`（用户故事）上加一条 comment：列出所有 `SUBTASKS`，说明"按顺序逐个执行，每次运行处理一个；本次先落地 `SUBTASKS[0]`，其余请下次触发本 skill 再逐个处理"。
+1. Based on "intent of each change step" and "affected files / modules" in the approved plan, divide the work into 2..N independent tasks that can each be delivered and tested separately. Each task should focus on one verifiable acceptance point; split again if the granularity is too large.
+2. Use the `/jira` skill to create that number of subtasks under the `TARGET` project (issuetype is usually "Task" / "Sub-task", depending on project configuration; ask the user if unsure), and make each new task a subtask of `TARGET` or link it back to `TARGET` with `is blocked by`.
+3. For each subtask, write a summary describing the delivered functional slice, and copy the corresponding part of the plan into the description (including acceptance point, affected files, and test strategy).
+4. Record the generated subtask key list as `SUBTASKS = [key1, key2, ...]`, ordered by dependency / implementation order.
+5. Add a comment to `TARGET` (the story): list all `SUBTASKS` and explain that they should be executed in order, one per run; this run will implement `SUBTASKS[0]` first, and the remaining subtasks should be handled by triggering this skill again later.
 
-**重新锁定 TARGET**：拆分完成后，把 `TARGET` **改指为 `SUBTASKS[0]`**（第一个子任务）。步骤 5 之后的所有 "TARGET" 引用（附件、代码、测试、review、commit、回写）都作用在这一个子任务上。整体 approved plan 中对应 `SUBTASKS[0]` 的那一段就是它的方案，无需再跑一遍 `/multi-agent-review-plan`。
+**Relock TARGET**: after splitting, set `TARGET` to `SUBTASKS[0]` (the first subtask). All "TARGET" references after step 5 (attachments, code, tests, review, commit, writeback) apply to this one subtask. The section of the overall approved plan corresponding to `SUBTASKS[0]` is its plan; there is no need to run `/multi-agent-review-plan` again.
 
-用户故事本身不在本次运行内做状态回写；下一次运行处理 `SUBTASKS[1]` 时，用户故事仍处于"拆分完待逐个消化"的状态即可。所有子任务都落完之后，用户再次触发本 skill 传用户故事的 key，步骤 2 的 DAG 会判定它无 open 上游、步骤 2.5 会检测到它是"所有子任务已完成的父任务" → 走**父任务收尾捷径**关闭它，不再走代码流程。
+Do not write back status to the story itself during this run. When the next run handles `SUBTASKS[1]`, the story remains in the "split and waiting to be consumed one by one" state. After all subtasks are complete, if the user triggers this skill again with the story key, step 2's DAG will determine there are no open upstream dependencies, and step 2.5 will detect that it is a "parent whose subtasks are all complete" -> use the **parent closeout shortcut** to close it, without running the code workflow again.
 
-### 5. 把 approved 方案作为附件贴到 JIRA
+### 5. Attach The Approved Plan To JIRA
 
-- 将最终方案写入 `${project_root_dir}/tmp/jira-plan-<TARGET>.md`（`TARGET` 是当前锁定的 issue：非拆分场景是原始根 issue；拆分场景是 `SUBTASKS[0]`）。
-- 通过 `/jira` skill 把该文件作为**附件**（attachment）上传到 `TARGET` issue。
-- 顺带在 issue 加一条 comment，简述 "已附最终方案，进入实现"，方便相关人追踪。
-- 拆分场景下，同时把完整方案文件作为附件上传到**用户故事本身**一份（子任务这份是子集，用户故事持有全量方便日后串联）。
+- Write the final plan to `${project_root_dir}/tmp/jira-plan-<TARGET>.md` (`TARGET` is the currently locked issue: in non-split scenarios it is the original root issue; in split scenarios it is `SUBTASKS[0]`).
+- Use the `/jira` skill to upload the file to the `TARGET` issue as an **attachment**.
+- Also add a comment to the issue briefly saying that the final plan has been attached and implementation is starting, so related people can track it.
+- In split scenarios, also upload the full plan file as an attachment to the **story itself** (the subtask copy is a subset; the story holds the full version for future linking).
 
-### 6. 写业务代码
+### 6. Write Product Code
 
-按当前 `TARGET` 对应的方案段落落地代码。遵守 CLAUDE.md 六条规则（尤其 Rule 2 最小变更、Rule 3 先读后写）。
+Implement the plan section corresponding to the current `TARGET`. Follow the six CLAUDE.md rules (especially Rule 2, minimal changes, and Rule 3, read before writing).
 
-**若走了步骤 4.5 拆分**：当前 `TARGET = SUBTASKS[0]`，代码改动只覆盖它的验收范围；不要提前动其他子任务的文件/模块，也不要把"顺手一起改了"塞进本次 commit——那会让 JIRA 每个子任务对应一个 commit 的追溯关系失效。
+**If step 4.5 splitting happened**: the current `TARGET = SUBTASKS[0]`, and code changes must cover only its acceptance scope. Do not modify files / modules for other subtasks ahead of time, and do not include "while I was here" changes in this commit; doing so breaks the traceability where each JIRA subtask maps to one commit.
 
-### 7. 写/改测试（硬门槛）
+### 7. Write / Update Tests (Hard Gate)
 
-- 新功能 → 新增测试用例覆盖 golden path + 至少一个边界。
-- Bug 修复 → 新增一个能复现 bug 的测试（先跑失败、修完跑通）。
-- 修改现有行为 → 更新受影响的测试断言，且断言要绑定"为什么"（业务规则），不是绑定当前返回值（对齐 CLAUDE.md Rule 5）。
-- 跑测试确认全绿；有 skip 的必须解释原因，不允许静默 skip。
+- New feature -> add tests covering the golden path plus at least one edge case.
+- Bug fix -> add a test that reproduces the bug (run it failing first, then make it pass).
+- Existing behavior change -> update affected test assertions, and bind assertions to "why" (business rule), not the current return value (aligned with CLAUDE.md Rule 5).
+- Run tests and confirm they are all green; explain any skipped tests. Silent skips are not allowed.
 
-### 8. `/multi-agent-review-code` Multi-agent ship-readiness loop
+### 8. `/multi-agent-review-code` Multi-Agent Ship-Readiness Loop
 
-**不允许跳过**。调 `/multi-agent-review-code`（多 reviewer 复审当前变更）。
+**Do not skip this.** Call `/multi-agent-review-code` (multiple reviewers re-review the current changes).
 
-- 每一轮收集 reviewer 提出的问题。
-- 只要还有新问题（哪怕上一轮修复引入的回归）→ 修 → 再跑 `/multi-agent-review-code`。
-- 直到一整轮 reviewer 都没再提新问题为止。
-- 期间可以适度用 `/audit` / `/codex` / `/agy` 做定向咨询。
+- Collect reviewer issues every round.
+- As long as there are new issues (even regressions introduced by the previous fix) -> fix -> run `/multi-agent-review-code` again.
+- Continue until a full reviewer round raises no new issues.
+- During the loop, you may use `/audit` / `/codex` / `/agy` for focused consultation as appropriate.
 
 ### 9. `/commit`
 
-`/multi-agent-review-code` 收敛后，调 `/commit` skill 提交本地修改。commit message 里体现 JIRA key（如 `(TARGET-KEY)`）便于追踪。
+After `/multi-agent-review-code` converges, call the `/commit` skill to commit local changes. Include the JIRA key in the commit message (for example `(TARGET-KEY)`) for traceability.
 
-提交后拿 commit id：
+After committing, obtain the commit id:
 
 ```bash
 git log -1 --format=%H
 ```
 
-记录短哈希（前 12 位）和完整哈希备用。
+Record the short hash (first 12 characters) and the full hash for later use.
 
-### 10. 回写 JIRA：状态 + 变更说明 + commit id
+### 10. Write Back To JIRA: Status + Change Notes + Commit Id
 
-用 `/jira` skill，作用在当轮的 `TARGET`（走拆分时即 `SUBTASKS[0]`；否则即原始根 issue）：
+Use the `/jira` skill on the current round's `TARGET` (in split scenarios this is `SUBTASKS[0]`; otherwise it is the original root issue):
 
-1. **加 comment**：包含
-   - 本次改动摘要（做了什么、影响哪些文件/模块）
-   - 测试情况（新增/修改的测试，运行结果）
-   - git commit id（完整哈希 + 短哈希）
-   - 分支名（`git rev-parse --abbrev-ref HEAD`）
-2. **切状态**：根据 issue 当前状态和可用 transition，切到合适的下一状态（通常是 "In Review" 或 "Resolved"，取决于团队流程）。先用 `/jira` 列可用 transition，再挑最贴合"代码已完成、待验收"语义的那个；拿不准就问用户。
+1. **Add a comment** containing:
+   - Summary of this change (what was done and which files / modules were affected)
+   - Test status (tests added / modified and run results)
+   - Git commit id (full hash + short hash)
+   - Branch name (`git rev-parse --abbrev-ref HEAD`)
+2. **Transition status**: based on the issue's current status and available transitions, move it to the appropriate next status (usually "In Review" or "Resolved", depending on the team workflow). First list available transitions with `/jira`, then pick the transition that best matches "code complete, awaiting acceptance"; ask the user if unsure.
 
-用户故事本身**不**在本次运行内做状态回写。
+Do **not** write back status to the story itself during this run.
 
-### 11. 收尾
+### 11. Closeout
 
-告诉用户：
-- 处理的是 `TARGET`（若和用户输入 key 不同，重申一次）。
-- commit id、JIRA 新状态（若走了步骤 2.5 父任务收尾捷径，则说明"无代码变更，仅收尾状态从 X 切到 Y"）。
-- 拆分场景：额外告诉用户"用户故事 <key> 已拆成 `SUBTASKS = [...]`，本次落地 `SUBTASKS[0]`，下一次触发本 skill 会自动挑到 `SUBTASKS[1]`（步骤 2 的 DAG 判定）；所有子任务落完后再触发一次本 skill 传用户故事 key，即会走步骤 2.5 关闭用户故事"。
-- 走步骤 2.5 收尾捷径场景：明确告诉用户"父任务 <key> 已根据所有子任务的完成情况收尾，本次未产生代码变更/commit"。
-- 若还有下游未处理的 issue（步骤 2 里绕过的那些），提示用户 "如需继续，请再次触发本 skill 处理 <下一个 key>"。
+Tell the user:
+- Which `TARGET` was handled (if different from the user-provided key, state that again).
+- Commit id and the new JIRA status (if the step 2.5 parent closeout shortcut was used, explain that there were no code changes and only the closeout status changed from X to Y).
+- Split scenario: additionally tell the user that story `<key>` has been split into `SUBTASKS = [...]`, this run implemented `SUBTASKS[0]`, the next trigger of this skill will automatically pick `SUBTASKS[1]` (by step 2's DAG decision), and after all subtasks are complete, triggering this skill once more with the story key will use step 2.5 to close the story.
+- Step 2.5 closeout shortcut scenario: explicitly tell the user that parent `<key>` was closed out based on all subtasks being complete, and this run produced no code changes / commit.
+- If there are still unhandled downstream issues (the ones skipped in step 2), tell the user: "To continue, trigger this skill again for <next key>."
 
-**本 skill 到此结束，不自动进入下一个（未处理的）根 issue 或下一个子任务。**
+**This skill ends here. Do not automatically continue to the next unhandled root issue or next subtask.**
 
-## 反模式（别犯）
+## Anti-Patterns (Avoid)
 
-- ❌ 拿到 issue 就直接开写——没先看 DAG，可能修完发现是上游 issue 修完就顺带解决了。
-- ❌ plan 写完不评审直接干——`/multi-agent-review-plan` 是硬门槛，很多设计问题在此拦截，成本最低。
-- ❌ 方案贴在 JIRA comment 里而不是附件——正文过长影响追溯；用附件。
-- ❌ 只改产品代码不改测试——测试通过 ≠ 功能对，且下次回归无护栏。
-- ❌ `/multi-agent-review-code` 提了问题挑轻的修、跳过重的——reviewer 提的每个新问题都要么修、要么用一句话解释为什么不修（并让下一轮 reviewer 认可）。
-- ❌ commit id 靠脑补或复用旧的——必须现取 `git log -1 --format=%H`。
-- ❌ 一次处理多个 issue、连着刷 DAG——本 skill 一次一个根节点，处理完就停。
-- ❌ 已 Closed 的 issue 还继续走流程——步骤 1 里就该止损。
-- ❌ 用户故事没子任务也不拆，plan approve 后直接一把梭写 500 行——违反步骤 4.5；粒度过大 review 和回归风险都无法收敛。
-- ❌ 拆完子任务后一次运行连着落地 `SUBTASKS[0]`、`SUBTASKS[1]`……——违反"一次运行只处理一个"不变量；每次运行只落地一个子任务，剩余的等下次触发。
-- ❌ 拆完子任务后本次运行就顺手把用户故事状态切成 Resolved——用户故事的状态回写留给"所有子任务都完成后再触发一次本 skill、走步骤 2.5 父任务收尾捷径"的那次运行，本次不动它。
-- ❌ 用户传的是全部子任务已完成的父任务，还照常跑 plan→code→review 流程——违反步骤 2.5；父任务不应有独立工作内容，此时只做汇总回写和状态切换。
-- ❌ 步骤 2.5 检测到父任务确有未落地的独立工作内容还硬走捷径关掉——错误关闭会让实际未做完的功能被淹没。应停手、告诉用户"父任务残留 X 未落地"，让用户先补子任务。
-- ❌ 一次 commit 打包多个子任务——JIRA 每条子任务都需要独立的 commit id 做追溯，混在一起后期无法拆开。
-- ❌ 已有子任务/关联任务的用户故事再触发步骤 4.5 拆分——步骤 4.5 只针对"无子任务且无下游"的孤儿用户故事；已有子任务的场景走步骤 2 的 DAG 逻辑，改处理其中一个 open 子任务。
+- Do not start coding immediately after receiving an issue. Without checking the DAG first, you may discover later that fixing an upstream issue would have resolved it.
+- Do not write a plan and implement without review. `/multi-agent-review-plan` is a hard gate, and it catches many design issues at the lowest cost.
+- Do not paste the plan into a JIRA comment instead of an attachment. Long body text harms traceability; use an attachment.
+- Do not change product code without tests. Passing tests does not prove the feature is correct, and future regressions will have no guardrail.
+- Do not cherry-pick easy reviewer issues from `/multi-agent-review-code` while skipping harder ones. Every new issue from a reviewer must either be fixed or explained in one sentence as not worth fixing, and the next reviewer round must accept that.
+- Do not invent a commit id or reuse an old one. Always fetch it live with `git log -1 --format=%H`.
+- Do not handle multiple issues or keep walking the DAG in one run. This skill handles one root node per run and stops after it is done.
+- Do not continue the workflow for an already Closed issue. Step 1 should stop it.
+- Do not skip splitting when a story has no subtasks and then implement 500 lines after plan approval. That violates step 4.5; overly large granularity makes review and regression risk impossible to contain.
+- Do not implement `SUBTASKS[0]`, `SUBTASKS[1]`, ... in one run after splitting. That violates the "one run handles only one issue" invariant; each run implements one subtask, and the rest wait for later triggers.
+- Do not casually transition the story to Resolved during the same run after splitting. Story status writeback is reserved for the later run where all subtasks are complete and step 2.5 uses the parent closeout shortcut.
+- Do not run the normal plan->code->review workflow when the user provides a parent whose subtasks are all complete. That violates step 2.5; parent tasks should not have independent implementation work, so only summary writeback and status transition are needed.
+- Do not force the step 2.5 shortcut when the parent still has independent unfinished work. Closing it incorrectly hides real unfinished functionality. Stop, tell the user the parent still has unfinished work X, and ask them to add a subtask first.
+- Do not bundle multiple subtasks into one commit. Each JIRA subtask needs its own commit id for traceability, and mixed commits are hard to split later.
+- Do not trigger step 4.5 splitting for a story that already has subtasks / linked tasks. Step 4.5 only applies to orphan stories with no subtasks and no downstream tasks; if subtasks already exist, use step 2's DAG logic and handle one open subtask.
