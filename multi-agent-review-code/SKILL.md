@@ -13,14 +13,14 @@ Heavyweight quality gate: Codex + Antigravity review the pending diff in paralle
 
 Before starting, determine the identity of the agent currently executing this skill:
 
-- **Default (Claude, etc.)**: dual review with Codex + Antigravity in parallel.
+- **Default (Claude Code, or any non-Codex main agent)**: dual review with Codex + Antigravity in parallel.
 - **The executor itself is Codex CLI**: **fall back to a single review** by running only Antigravity. Rationale: Codex self-review is equivalent to having the author review their own work, without an independent perspective; keep Antigravity as the external reviewer. In fallback mode:
   - Step 3 dispatches only Antigravity and skips the Codex path.
   - Step 4 aggregation is done as a "single reviewer"; descriptions such as "both reviewers found this" do not apply.
   - The final report must state that this round used **single-review fallback** mode and explain why, so the user does not mistakenly think Codex also approved it.
 - **How to decide**: if the current agent identity cannot be determined, use the default dual-review mode; if context clearly shows the executor is Codex (for example a subtask launched via `codex exec`, or a prompt explicitly says the executor is codex), use the fallback path.
 
-**Round budget**: unlimited review->fix rounds until the current round has no must-fix items, or one of the Exit conditions below is triggered.
+**Round budget**: unlimited review->fix rounds until the current round has no must-fix AND no should-fix items, or one of the Exit conditions below is triggered. Do **not** cap by round count.
 
 ## Per-Round Steps
 
@@ -79,25 +79,31 @@ Transport:
 ### 4. Aggregate Findings
 
 - **Deduplicate**: if both reviewers identify the same root cause at the same `file:line`, merge it into one item and note that both found it.
-- **Reclassify** into **must-fix / should-fix / nit**: an item is **must-fix** only if at least one reviewer marks it must-fix **and** Claude independently judges that it would cause a real problem. Reviewers can be wrong; do not rubber-stamp them.
-- Before fixing, report the aggregated list to the user in Chinese.
+- **Reclassify** into **must-fix / should-fix / nit**: an item is **must-fix** only if at least one reviewer marks it must-fix **and** the main agent independently judges that it would cause a real problem; an item is **should-fix** if at least one reviewer marks it should-fix (or must-fix reclassified down) **and** the main agent judges it worth fixing. Reviewers can be wrong; do not rubber-stamp them.
+- **Soft circuit breaker — filter unrealistic items before fixing** (the main agent MUST apply, in order):
+  1. **Realistic-likelihood filter**: downgrade to nit (or drop entirely) any item whose triggering condition is nearly impossible in real production use — e.g. a `nil` deref that requires a caller to violate a documented invariant, an "unbounded input" concern on a field the schema already caps, a race that requires two goroutines that never actually run together. Ask: "Under what real workload does this fire?" If the answer is contrived, do not fix it.
+  2. **Divergence guard**: if a new round's must-fix / should-fix items are the same *category* as items already dismissed in earlier rounds (same reviewer re-raising a pattern under a new file:line), dismiss them by reference and do not re-litigate.
+  3. **Cost / benefit sanity check**: downgrade should-fix items whose fix is materially larger than the risk they mitigate (e.g. adding a config knob and 50 lines of plumbing to guard against a 1-in-10⁶ edge case).
+  4. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
+- Before fixing, report the aggregated list — including downgrades and drops with reasons — to the user in Chinese.
 
-### 5. Fix (Only When Must-Fix Items > 0)
+### 5. Fix (When Must-Fix Or Should-Fix Items > 0)
 
-- **Fix only must-fix items**; leave should-fix / nit items for the user to decide.
+- **Fix both must-fix and should-fix items**; leave nit items for the user to decide.
 - Follow CLAUDE.md Rule 2: minimal surgical changes, no opportunistic surrounding refactors.
 - After fixing, increment the round count and return to Step 1.
 
 ### 6. Exit Conditions
 
 **Stop** and summarize when any of the following is true:
-- 3 rounds have run, regardless of whether must-fix items remain.
-- Must-fix count after aggregation in the current round is 0.
-- Claude judges all remaining must-fix items invalid and gives reasons (do not loop forever on disagreement).
+- Must-fix count AND should-fix count after aggregation in the current round are both 0.
+- The main agent judges all remaining must-fix and should-fix items invalid and gives reasons (do not loop forever on disagreement).
+
+There is **no hard round cap** — keep looping as long as new must-fix or should-fix items keep appearing.
 
 ### Final Report (Chinese)
 
 - How many rounds ran, and what each reviewer found in each round.
-- Fixed: list every must-fix item and how it was fixed.
-- Not fixed: remaining should-fix / nit items / must-fix items Claude judged invalid, with reasons.
+- Fixed: list every must-fix and should-fix item and how it was fixed.
+- Not fixed: remaining nit items / must-fix or should-fix items the main agent judged invalid, with reasons.
 - Points the user needs to decide.

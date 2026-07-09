@@ -13,7 +13,7 @@ Use a dual Codex + Antigravity review **before writing code** to align direction
 
 Before starting, determine the identity of the agent currently executing this skill:
 
-- **Default (Claude, etc.)**: dual review with Codex + Antigravity in parallel.
+- **Default (Claude Code, or any non-Codex main agent)**: dual review with Codex + Antigravity in parallel.
 - **The executor itself is Codex CLI**: **fall back to a single review** by running only Antigravity. Rationale: Codex self-review is equivalent to having the plan author review their own plan, without an independent perspective; keep Antigravity as the external reviewer. In fallback mode:
   - Step 3 dispatches only Antigravity and skips the Codex path.
   - Step 4 aggregation is done as a "single reviewer"; descriptions such as "both reviewers found this" do not apply.
@@ -74,21 +74,27 @@ Transport:
 ## Step 4 - Aggregate Feedback And Update The Plan
 
 - **Deduplicate**: merge the same root cause identified by both reviewers into one item, and note when both found it.
-- **Reclassify** into **must-fix / should-fix / nit**: must-fix = at least one reviewer marks it must-fix **and** Claude independently judges the issue would affect plan validity. Reviewers can be wrong; be willing to disagree.
-- Report the aggregated list to the user in **Chinese**.
-- **Modify the plan only for must-fix items**; leave should-fix / nit items for the user to decide.
+- **Reclassify** into **must-fix / should-fix / nit**: must-fix = at least one reviewer marks it must-fix **and** the main agent independently judges the issue would affect plan validity; should-fix = at least one reviewer marks it should-fix (or must-fix reclassified down) **and** the main agent judges it worth incorporating. Reviewers can be wrong; be willing to disagree.
+- **Soft circuit breaker — filter unrealistic items before updating the plan** (the main agent MUST apply, in order):
+  1. **Realistic-likelihood filter**: downgrade to nit (or drop entirely) any item whose triggering condition is nearly impossible under this project's real usage — e.g. concurrency concerns on a nightly single-writer batch job, "what if the DB schema changes" on a table owned by this same repo, migration-rollback demands for a one-shot import. Ask: "Under what realistic scenario does this bite us?" If the answer is contrived, do not incorporate it.
+  2. **Divergence guard**: if a new round's must-fix / should-fix items are the same *category* as items already dismissed in earlier rounds (a reviewer re-raising the same pattern), dismiss them by reference and do not re-litigate.
+  3. **Scope-creep guard**: downgrade should-fix items that would materially expand the plan's scope beyond the stated goal (adding new features, new abstractions, adjacent refactors). Rule 2 of CLAUDE.md applies to plan reviews too.
+  4. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
+- Report the aggregated list — including downgrades and drops with reasons — to the user in **Chinese**.
+- **Modify the plan for both must-fix and should-fix items**; leave nit items for the user to decide.
 - After updating the plan, increment the round count and return to Step 2 for another review.
 
 ## Step 5 - Exit Conditions
 
 **Stop** when any of the following is true:
-- 3 rounds have run, regardless of whether must-fix items remain.
-- Must-fix count after aggregation in the current round is 0.
-- Claude judges all remaining must-fix items invalid and gives reasons.
+- Must-fix count AND should-fix count after aggregation in the current round are both 0.
+- The main agent judges all remaining must-fix and should-fix items invalid and gives reasons.
+
+There is **no hard round cap** — keep looping as long as new must-fix or should-fix items keep appearing.
 
 ## Final Report (Chinese)
 
 - How many rounds ran, and what each reviewer found in each round.
 - The final plan version (what changed and why).
-- Not fixed: remaining should-fix / nit items / must-fix items Claude judged invalid, with reasons.
+- Not fixed: remaining nit items / must-fix or should-fix items the main agent judged invalid, with reasons.
 - Points the user needs to decide: explicitly ask the user to confirm before implementation.
