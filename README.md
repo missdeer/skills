@@ -17,6 +17,8 @@ This is a Codex CLI skill collection. Each subdirectory is a skill that Codex ca
 | [notebooklm](notebooklm/SKILL.md) | Google NotebookLM automation: podcasts, reports, slides, and deep research |
 | [pkg-go-dev](pkg-go-dev/SKILL.md) | Query the pkg.go.dev v1beta REST API for Go package docs, versions, and CVEs |
 | [cctv-h5e-download](cctv-h5e-download/SKILL.md) | Download and decrypt CCTV/CNTV H5e encrypted HLS streams into local MP4 files |
+| [cdb-debugging](cdb-debugging/SKILL.md) | Diagnose Windows crashes, startup failures, hangs, and dumps with scripted `cdb.exe` sessions |
+| [cmake-build](cmake-build/SKILL.md) | Build, clean, and reconfigure GarmentStyleMatch through its Windows CMake wrapper commands |
 
 ## Structure
 
