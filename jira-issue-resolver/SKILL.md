@@ -2,7 +2,7 @@
 name: jira-issue-resolver
 description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root -> producing a plan -> /review-plan -> attaching the plan -> coding and testing -> /review -> /commit -> writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # jira-issue-resolver
@@ -71,7 +71,14 @@ If the conditions are not met, skip this section and continue to step 3.
 
 ### 3. Produce A Plan (Plan Mode Or Conversational)
 
-Decide for yourself:
+**First check whether the issue already ships with a plan.** Inspect the issue's description body and its attachments (use the `/jira` skill to list attachments and download any plan-shaped files, e.g. `*plan*.md`, `*design*.md`, `*proposal*.pdf`). If a complete execution plan is already present, judge its quality and act as follows:
+
+- **High-quality, complete plan** (covers goal / affected files / change steps / test strategy / risks, and is aligned with the current codebase state): adopt it directly as `TARGET`'s plan, **skip steps 4 and 5** (no need to run `/multi-agent-review-plan` again, and no need to attach a duplicate plan file), briefly tell the user "the issue already has an approved plan attached, adopting it directly", then jump to step 6. Still write a copy of the adopted plan to `${project_root_dir}/tmp/jira-plan-<TARGET>.md` for local reference.
+- **Mostly complete but with minor gaps** (e.g. missing test strategy or risk section, or a few affected files are stale): fill in the gaps yourself to form the final plan, run `/multi-agent-review-plan` **once** as a sanity check, then continue with step 5.
+- **Only a rough idea / requirements outline / partial design** (not a real execution plan): treat as "no existing plan" and go through the normal step 3 -> step 4 flow below.
+- **In doubt**: ask the user in one sentence "the issue already has document X attached, treat it as the final plan or run review again?" and follow the user's decision.
+
+If no existing plan is found, decide for yourself:
 - If the change is clear and the impact is small, write the plan directly in the conversation.
 - If there are many changes or code exploration is needed, enter plan mode (`EnterPlanMode`).
 - If unsure, ask the user in one sentence: "Should I produce a plan before implementation?" If the user says no, skip review and go directly to step 6 (generally not recommended).
@@ -195,3 +202,5 @@ Tell the user:
 - Do not force the step 2.5 shortcut when the parent still has independent unfinished work. Closing it incorrectly hides real unfinished functionality. Stop, tell the user the parent still has unfinished work X, and ask them to add a subtask first.
 - Do not bundle multiple subtasks into one commit. Each JIRA subtask needs its own commit id for traceability, and mixed commits are hard to split later.
 - Do not trigger step 4.5 splitting for a story that already has subtasks / linked tasks. Step 4.5 only applies to orphan stories with no subtasks and no downstream tasks; if subtasks already exist, use step 2's DAG logic and handle one open subtask.
+- Do not blindly rewrite a plan when the issue description / attachments already contain a complete execution plan. Adopt or fill in the gaps as described in step 3; forcing a re-plan wastes review budget and may drift from the reviewed design.
+- Do not skip `/multi-agent-review-plan` on a plan you wrote yourself just because "the issue also has an old plan attached". The step 3 skip is only for adopting the existing plan as-is; any plan you author or substantively edit must still pass the review gate.
