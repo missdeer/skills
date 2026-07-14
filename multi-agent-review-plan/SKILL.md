@@ -55,17 +55,17 @@ Plan under review:
 
 Transport:
 - Write prompts to `./tmp/review-plan-codex-prompt-<ts>.txt` and `./tmp/review-plan-agy-prompt-<ts>.txt` respectively (fallback mode only needs the agy prompt).
-- **Dual-review mode**: issue two Bash background calls side by side in one message (`run_in_background: true`, `timeout: 1800000`) to ensure parallelism:
+- **Dual-review mode**: issue two Bash background calls side by side in one message (`run_in_background: true`, `timeout: 1800000`) to ensure parallelism. **Always wrap the reviewer command in `bash -lc "..."`** so it runs under a login shell (PATH / helper functions like `_cmake_ps` etc. are available). Use double quotes for the outer `bash -lc` argument and escape the inner double quotes for `$(bat ...)` — single quotes break argument passing on Windows Git Bash:
   ```bash
-  codex exec -s read-only --skip-git-repo-check "$(bat --plain --paging=never ./tmp/review-plan-codex-prompt-<ts>.txt)"
+  bash -lc "codex exec -s read-only --skip-git-repo-check \"\$(bat --plain --paging=never ./tmp/review-plan-codex-prompt-<ts>.txt)\""
   ```
   ```bash
-  agy-wrapper --dangerously-skip-permissions --timeout 30m -p "$(bat --plain --paging=never ./tmp/review-plan-agy-prompt-<ts>.txt)"
+  bash -lc "agy-wrapper --dangerously-skip-permissions --timeout 30m -p \"\$(bat --plain --paging=never ./tmp/review-plan-agy-prompt-<ts>.txt)\""
   ```
   Continue to Step 4 only after both return.
-- **Single-review fallback mode (executor is Codex CLI)**: run only one path:
+- **Single-review fallback mode (executor is Codex CLI)**: run only one path (still wrapped in `bash -lc "..."`):
   ```bash
-  agy-wrapper --dangerously-skip-permissions --timeout 30m -p "$(bat --plain --paging=never ./tmp/review-plan-agy-prompt-<ts>.txt)"
+  bash -lc "agy-wrapper --dangerously-skip-permissions --timeout 30m -p \"\$(bat --plain --paging=never ./tmp/review-plan-agy-prompt-<ts>.txt)\""
   ```
 - Poll results with `TaskOutput`, and delete temporary files after completion.
 - If one CLI is missing (for example `agy-wrapper` is not on PATH), tell the user and continue with the remaining reviewer. Do not pretend the missing reviewer also passed. In fallback mode, if `agy-wrapper` is missing, tell the user this round cannot be reviewed; do not fall back to Codex self-review.
