@@ -9,16 +9,20 @@ metadata:
 
 Heavyweight quality gate: Codex + Antigravity review the pending diff in parallel -> aggregate -> fix only must-fix items -> review again, looping until clean or the limit is reached.
 
-## Execution Mode: Dual Review Vs Single-Review Fallback
+## Execution Mode: Dual Review / Single-Review Fallback / Sub-Reviewer Bypass
 
-Before starting, determine the identity of the agent currently executing this skill:
+Before starting, determine which of the three scenarios applies to the agent currently executing this skill:
 
 - **Default (Claude Code, or any non-Codex main agent)**: dual review with Codex + Antigravity in parallel.
-- **The executor itself is Codex CLI**: **fall back to a single review** by running only Antigravity. Rationale: Codex self-review is equivalent to having the author review their own work, without an independent perspective; keep Antigravity as the external reviewer. In fallback mode:
+- **Codex as sub-reviewer (invoked by a parent agent through `codex exec` to review a diff)**: **do NOT run this skill at all**. The prompt from the parent agent already contains a review request; just perform the review directly and return findings. Never dispatch Codex, Antigravity, or any other reviewer/agent from here. The Codex prefix line in Step 3 below always carries this instruction, so if you see it in your incoming prompt, exit the skill immediately and just review.
+- **Codex as main agent (a user directly asked Codex CLI to run this review skill)**: **fall back to a single review** by running only Antigravity. Rationale: Codex self-review is equivalent to having the author review their own work, without an independent perspective; keep Antigravity as the external reviewer. In fallback mode:
   - Step 3 dispatches only Antigravity and skips the Codex path.
   - Step 4 aggregation is done as a "single reviewer"; descriptions such as "both reviewers found this" do not apply.
   - The final report must state that this round used **single-review fallback** mode and explain why, so the user does not mistakenly think Codex also approved it.
-- **How to decide**: if the current agent identity cannot be determined, use the default dual-review mode; if context clearly shows the executor is Codex (for example a subtask launched via `codex exec`, or a prompt explicitly says the executor is codex), use the fallback path.
+- **How to decide**:
+  - Incoming prompt contains the sub-reviewer prefix from Step 3, OR the prompt is a direct review request forwarded by a parent agent → **sub-reviewer bypass**.
+  - Executor is Codex CLI and the user directly asked Codex to "run the review loop" / "review this diff with dual reviewers" → **single-review fallback**.
+  - Otherwise → **default dual-review**.
 
 **Round budget**: unlimited review->fix rounds until the current round has no must-fix AND no should-fix items, or one of the Exit conditions below is triggered. Do **not** cap by round count.
 
@@ -56,7 +60,7 @@ Both reviewers use the same body, each with its own prefix line:
 
 | Reviewer | Prefix line | Perspective |
 |---|---|---|
-| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back.` | Deep technical review, edge cases, line-level correctness |
+| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform the review yourself and output findings only. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Just review and return.` | Deep technical review, edge cases, line-level correctness |
 | Antigravity | `Do NOT run any git write commands (commit, push, reset, etc.). Git repository is read-only for you. Do NOT modify any files. Read-only operations only — provide findings as text/diff in your response.` | High-level architecture, design consistency, alternative angles |
 
 Transport:
