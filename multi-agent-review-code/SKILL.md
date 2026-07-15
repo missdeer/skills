@@ -49,6 +49,8 @@ Do not ask me to paste it; run the command and review its output. The repo's cod
   4. Backward compatibility breaks (DB schema, public APIs, file formats)
   5. CLAUDE.md / Go-standards violations (legacy CLI use, non-modern Go idioms, unused params)
 
+Focus on issues that can realistically occur under this project's actual usage patterns and threat model. Do NOT raise must-fix / should-fix items for contrived edge cases that require callers to violate documented invariants, exceed schema-enforced limits, or invoke code paths that never co-execute in practice. If you're unsure whether a scenario is realistic, classify as nit and state the assumed trigger condition so the main agent can judge.
+
 You are reviewing; do NOT propose code edits — list findings only, each with file:line and a one-sentence rationale. Classify each as must-fix / should-fix / nit.
 
 Focus instruction from user (may be empty): <ARGS>

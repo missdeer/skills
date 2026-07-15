@@ -44,6 +44,8 @@ Review the following implementation plan for correctness, coverage, and directio
   4. Dependencies and prerequisites - whether it assumes invalid premises or misses external constraints
   5. Verifiability - how completion can be proven and whether the verification method is executable
 
+Focus on issues that can realistically bite this project under its actual usage patterns and constraints. Do NOT raise must-fix / should-fix items for contrived scenarios — e.g. concurrency concerns on a single-writer nightly job, migration-rollback demands for a one-shot import, "what if the schema changes" on a table owned by this same repo. If you're unsure whether a scenario is realistic, classify as nit and state the assumed trigger condition so the main agent can judge.
+
 You are reviewing; do NOT propose code edits or modify any files — list findings only, each with a one-sentence rationale. Classify each as must-fix / should-fix / nit.
 
 Plan under review:
