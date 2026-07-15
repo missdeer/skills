@@ -48,9 +48,13 @@ You are reviewing; do NOT propose code edits or modify any files — list findin
 
 Plan under review:
 <PLAN_TEXT>
+
+Previously dismissed items (do not re-raise unless you have new evidence that materially changes the judgment): <DISMISSED_LIST>
 ```
 
 `<PLAN_TEXT>` = the original text of the plan from Step 1; do not compress it.
+
+`<DISMISSED_LIST>` = the list of items downgraded / dropped in previous rounds together with the reason (from Step 4's aggregated report). Empty on round 1; from round 2 onward, the main agent MUST populate it verbatim from the prior round's report so reviewers know what has already been considered and rejected.
 
 ## Step 3 - Dispatch Reviewers
 
@@ -84,7 +88,7 @@ Transport:
 - **Reclassify** into **must-fix / should-fix / nit**: must-fix = at least one reviewer marks it must-fix **and** the main agent independently judges the issue would affect plan validity; should-fix = at least one reviewer marks it should-fix (or must-fix reclassified down) **and** the main agent judges it worth incorporating. Reviewers can be wrong; be willing to disagree.
 - **Soft circuit breaker — filter unrealistic items before updating the plan** (the main agent MUST apply, in order):
   1. **Realistic-likelihood filter**: downgrade to nit (or drop entirely) any item whose triggering condition is nearly impossible under this project's real usage — e.g. concurrency concerns on a nightly single-writer batch job, "what if the DB schema changes" on a table owned by this same repo, migration-rollback demands for a one-shot import. Ask: "Under what realistic scenario does this bite us?" If the answer is contrived, do not incorporate it.
-  2. **Divergence guard**: if a new round's must-fix / should-fix items are the same *category* as items already dismissed in earlier rounds (a reviewer re-raising the same pattern), dismiss them by reference and do not re-litigate.
+  2. **Divergence guard**: reviewers are told about previously dismissed items via `<DISMISSED_LIST>` in Step 2, so this filter is a backstop. If a new round's must-fix / should-fix items are the same *category* as items already dismissed in earlier rounds (a reviewer re-raising the same pattern without new evidence), dismiss them by reference and do not re-litigate.
   3. **Scope-creep guard**: downgrade should-fix items that would materially expand the plan's scope beyond the stated goal (adding new features, new abstractions, adjacent refactors). Rule 2 of CLAUDE.md applies to plan reviews too.
   4. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
 - Report the aggregated list — including downgrades and drops with reasons — to the user in **Chinese**.

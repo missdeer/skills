@@ -52,7 +52,11 @@ Do not ask me to paste it; run the command and review its output. The repo's cod
 You are reviewing; do NOT propose code edits — list findings only, each with file:line and a one-sentence rationale. Classify each as must-fix / should-fix / nit.
 
 Focus instruction from user (may be empty): <ARGS>
+
+Previously dismissed items (do not re-raise unless you have new evidence that materially changes the judgment): <DISMISSED_LIST>
 ```
+
+`<DISMISSED_LIST>` = the list of items downgraded / dropped in previous rounds together with the reason (from Step 4's aggregated report). Empty on round 1; from round 2 onward, the main agent MUST populate it verbatim from the prior round's report so reviewers know what has already been considered and rejected.
 
 ### 3. Dispatch Reviewers
 
@@ -87,7 +91,7 @@ Transport:
 - **Reclassify** into **must-fix / should-fix / nit**: an item is **must-fix** only if at least one reviewer marks it must-fix **and** the main agent independently judges that it would cause a real problem; an item is **should-fix** if at least one reviewer marks it should-fix (or must-fix reclassified down) **and** the main agent judges it worth fixing. Reviewers can be wrong; do not rubber-stamp them.
 - **Soft circuit breaker — filter unrealistic items before fixing** (the main agent MUST apply, in order):
   1. **Realistic-likelihood filter**: downgrade to nit (or drop entirely) any item whose triggering condition is nearly impossible in real production use — e.g. a `nil` deref that requires a caller to violate a documented invariant, an "unbounded input" concern on a field the schema already caps, a race that requires two goroutines that never actually run together. Ask: "Under what real workload does this fire?" If the answer is contrived, do not fix it.
-  2. **Divergence guard**: if a new round's must-fix / should-fix items are the same *category* as items already dismissed in earlier rounds (same reviewer re-raising a pattern under a new file:line), dismiss them by reference and do not re-litigate.
+  2. **Divergence guard**: reviewers are told about previously dismissed items via `<DISMISSED_LIST>` in Step 2, so this filter is a backstop. If a new round's must-fix / should-fix items are the same *category* as items already dismissed in earlier rounds (same reviewer re-raising a pattern under a new file:line, without adding new evidence), dismiss them by reference and do not re-litigate.
   3. **Cost / benefit sanity check**: downgrade should-fix items whose fix is materially larger than the risk they mitigate (e.g. adding a config knob and 50 lines of plumbing to guard against a 1-in-10⁶ edge case).
   4. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
 - Before fixing, report the aggregated list — including downgrades and drops with reasons — to the user in Chinese.
