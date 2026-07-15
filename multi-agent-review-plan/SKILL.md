@@ -32,6 +32,8 @@ Before starting, determine which of the three scenarios applies to the agent cur
 
 **Scope of a reviewable plan**: the plan (and this review) covers business logic and flow only — what the change achieves, module interactions, data shape, state transitions, boundary / acceptance rules. It does **not** cover code implementation details (concrete function signatures, code snippets, variable names, loop / branch structure, line-level pseudo-code). If the incoming plan is largely implementation-level, ask the author to rewrite it at the business-logic level before reviewing; reviewers should also refrain from raising must-fix / should-fix items purely about code-level style or micro-implementation choices.
 
+**Pre-dispatch self-audit (main agent, MUST run before every dispatch)**: read the plan you are about to send and grep-check it for implementation-level content — concrete function / method / struct names (e.g. `Cache.DeletePattern`, `Config.Dewu.Reports.UseDailySummary2X`), specific pragmas / flags (e.g. `PRAGMA busy_timeout=5000`, `--dates a,b,c`), file paths / lock-file locations (e.g. `tmp/refresh-xxx.lock`), package-layout claims (e.g. "expose via `reportops.BuildXxx`"), literal pattern strings (e.g. `commerce:xxx:v2:module:*`), or specific test tooling commands (e.g. `go test -json | jq ...`). Delete every such line — the plan should describe *what business rule holds and what data flows* rather than *which function name / knob / pragma / path implements it*. If you find yourself unwilling to delete a line because "the reviewers asked for it", that's exactly the drift filter-4 in Step 4 exists to prevent — the previous reviewer round should not have kept those items as must/should-fix in the first place. Only after the self-audit passes should you proceed to Step 2.
+
 ## Step 2 - Assemble The Shared Message Body
 
 Both reviewers use the same body, with only different prefix lines:
@@ -45,6 +47,8 @@ Review the following implementation plan for correctness, coverage, and directio
   5. Verifiability - how completion can be proven and whether the verification method is executable
 
 Focus on issues that can realistically bite this project under its actual usage patterns and constraints. Do NOT raise must-fix / should-fix items for contrived scenarios — e.g. concurrency concerns on a single-writer nightly job, migration-rollback demands for a one-shot import, "what if the schema changes" on a table owned by this same repo. If you're unsure whether a scenario is realistic, classify as nit and state the assumed trigger condition so the main agent can judge.
+
+**Stay at the business-logic layer.** A plan is reviewed for direction and correctness, not for implementation choices. Do NOT raise must-fix / should-fix items about: concrete function / method / struct names, cache-client API surface (e.g. `DeletePattern` vs `Del`), specific DB pragmas (`PRAGMA busy_timeout=...`), exact CLI flag syntax, file paths / lock-file locations, package layout / where a helper should live, testing tooling (e.g. `go test -json | jq`), configuration format (env var vs JSON key vs YAML). These belong in code review after implementation, not in plan review. If the plan already contains such implementation-level content, note in a nit that "these implementation details should be moved out of the plan"; do not open must/should-fix threads on them.
 
 You are reviewing; do NOT propose code edits or modify any files — list findings only, each with a one-sentence rationale. Classify each as must-fix / should-fix / nit.
 
@@ -92,7 +96,9 @@ Transport:
   1. **Realistic-likelihood filter**: downgrade to nit (or drop entirely) any item whose triggering condition is nearly impossible under this project's real usage — e.g. concurrency concerns on a nightly single-writer batch job, "what if the DB schema changes" on a table owned by this same repo, migration-rollback demands for a one-shot import. Ask: "Under what realistic scenario does this bite us?" If the answer is contrived, do not incorporate it.
   2. **Divergence guard**: reviewers are told about previously dismissed items via `<DISMISSED_LIST>` in Step 2, so this filter is a backstop. If a new round's must-fix / should-fix items are the same *category* as items already dismissed in earlier rounds (a reviewer re-raising the same pattern without new evidence), dismiss them by reference and do not re-litigate.
   3. **Scope-creep guard**: downgrade should-fix items that would materially expand the plan's scope beyond the stated goal (adding new features, new abstractions, adjacent refactors). Rule 2 of CLAUDE.md applies to plan reviews too.
-  4. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
+  4. **Business-vs-implementation guard**: downgrade to nit — do NOT write into the plan — any item whose subject is a code-level choice: concrete function / method / variable / struct names, cache-client API surface, DB pragmas, exact CLI flag syntax, file paths / lock-file locations, package layout, testing tool syntax, config format details, specific pattern strings, or specific lint / vet commands. Even when the reviewer marks it must-fix, if the *substance* is "which knob to turn / which name to use / how to wire it", it belongs in code review. Ask: "Is this a business-rule error or an implementation choice?" If implementation, filter it. The plan should describe *what data flows and business rules hold*; it should NOT describe *which function has which signature or which pragma to set*.
+  5. **Plan-bloat / non-convergence guard**: if the current plan length is > 1.5× the round-1 plan length, OR round N's must-fix count is not strictly less than round N-1's, stop looping and report to the user. Do not silently continue. Likely causes: the plan has drifted into implementation details (see filter 4), OR the task is Story-scope and should be split into subtasks before individual-subtask plans are reviewed. Ask the user which recovery path to take before continuing.
+  6. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
 - Report the aggregated list — including downgrades and drops with reasons — to the user in **Chinese**.
 - **Modify the plan for both must-fix and should-fix items**; leave nit items for the user to decide.
 - After updating the plan, increment the round count and return to Step 2 for another review.
@@ -102,8 +108,9 @@ Transport:
 **Stop** when any of the following is true:
 - Must-fix count AND should-fix count after aggregation in the current round are both 0.
 - The main agent judges all remaining must-fix and should-fix items invalid and gives reasons.
+- The Step 4 filter-5 (Plan-bloat / non-convergence guard) fires — pause and hand off to the user with recovery options, do not continue looping until the user picks one.
 
-There is **no hard round cap** — keep looping as long as new must-fix or should-fix items keep appearing.
+There is **no hard round cap** — keep looping as long as new must-fix or should-fix items keep appearing, **but** filter-5 will terminate a runaway loop before it consumes many rounds. Typical healthy convergence is 2–3 rounds; if you are past round 3 and still adding must-fix items, that is a signal that the plan-vs-review scope is mismatched.
 
 ## Final Report (Chinese)
 
