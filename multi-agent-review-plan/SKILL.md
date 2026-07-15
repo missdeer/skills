@@ -30,6 +30,8 @@ Before starting, determine which of the three scenarios applies to the agent cur
 - Existing sufficient plan: skip the plan-writing step and use the existing plan directly.
 - If the task itself is trivial enough (1-2 steps, implemented in one pass), this skill does not apply; implement directly.
 
+**Scope of a reviewable plan**: the plan (and this review) covers business logic and flow only — what the change achieves, module interactions, data shape, state transitions, boundary / acceptance rules. It does **not** cover code implementation details (concrete function signatures, code snippets, variable names, loop / branch structure, line-level pseudo-code). If the incoming plan is largely implementation-level, ask the author to rewrite it at the business-logic level before reviewing; reviewers should also refrain from raising must-fix / should-fix items purely about code-level style or micro-implementation choices.
+
 ## Step 2 - Assemble The Shared Message Body
 
 Both reviewers use the same body, with only different prefix lines:

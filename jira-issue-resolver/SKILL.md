@@ -90,6 +90,8 @@ The plan must include:
 - Test strategy (which cases to add / modify and how to run them)
 - Risks and rollback
 
+**Scope of the plan**: focus on business logic and flow (what the change achieves, which modules interact, data shape, state transitions, boundary rules, acceptance points). Do **not** include code implementation details such as concrete function signatures, snippets, variable names, loop / branch structure, or line-level pseudo-code. Implementation-level decisions belong in step 6 (writing code), not in the plan.
+
 ### 4. `/multi-agent-review-plan` Review Loop
 
 **Do not skip this.** After writing the plan, immediately call `/multi-agent-review-plan` (the command distributes the plan to Codex + AntiGravity for read-only review).
