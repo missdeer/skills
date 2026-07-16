@@ -1,8 +1,8 @@
 ---
 name: jira-issue-resolver
-description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root -> producing a plan -> /review-plan -> attaching the plan -> coding and testing -> /review -> /commit -> writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
+description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root, producing and reviewing a high-level plan, attaching the plan, coding and testing, reviewing code, committing, and writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # jira-issue-resolver
@@ -20,12 +20,13 @@ Start this workflow only when an issue key can be parsed (shape: `PROJECT-123`).
 
 ## Key Invariants (Stop If Violated)
 
-1. **One run handles only one issue**: follow blocks / depends on / subtask links to find the most upstream root node, and handle only that node. After finding the root, do not go back and handle other nodes, and do not merge multiple issues into one run. If the root is Story-scope (Story type, or Task / Epic type whose scope spans ≥3 loosely coupled deliverables or ≥800-line diff) and has no existing subtasks / linked implementation tasks, follow step 4.5: split into subtasks in JIRA **before** writing a detailed plan, then **implement only the first subtask** in this run (code + test + review + commit + JIRA writeback), then stop. Leave the remaining subtasks and the parent closeout for later user-triggered runs.
+1. **One run handles only one issue**: follow blocks / depends on / subtask links to find the most upstream root node, and handle only that node. After finding the root, do not go back and handle other nodes, and do not merge multiple issues into one run. If the root is Story-scope (Story type, or Task / Epic type whose scope spans ≥3 loosely coupled deliverables or ≥800-line diff) and has no existing subtasks / linked implementation tasks, follow step 4.5: split into subtasks in JIRA **before** writing a subtask-scoped plan, then **implement only the first subtask** in this run (code + test + review + commit + JIRA writeback), then stop. Leave the remaining subtasks and the parent closeout for later user-triggered runs.
 2. **Do not write code before the plan is approved**: regardless of whether the plan comes from plan mode or normal conversation, do not Edit / Write product code until `/multi-agent-review-plan` has returned "approved".
 3. **Code changes must include matching tests**: after product code is written, add or modify corresponding tests. Changing product code without tests means the phase is incomplete.
 4. **Do not commit until `/multi-agent-review-code` converges**: as long as reviewers raise new issues in the `/multi-agent-review-code` loop, keep fixing and reviewing until a full round returns with no new issues. Reintroduced old issues also count as new issues.
 5. **Use the real git commit value for JIRA writeback**: obtain the commit id from `git log -1 --format=%H`; do not rely on memory or reuse a previous hash.
 6. **The plan file must be attached to JIRA**: do not paste it into the body. Upload it as an attachment through the `/jira` skill's attachment interface.
+7. **Keep every plan and plan review high-level**: both the plan author and reviewers must limit themselves to technology selection, high-level architecture, business direction and flow, and basic business logic. Never put implementation details or code expression into a plan, and never accept reviewer feedback that asks for them.
 
 ## Steps
 
@@ -71,13 +72,13 @@ If the conditions are not met, skip this section and continue to step 3.
 
 ### 3. Produce A Plan (Plan Mode Or Conversational)
 
-**First evaluate scope for step 4.5 splitting.** If `TARGET` matches the widened step 4.5 trigger (Story type OR Task/Epic with Story-scope description, no subtasks, no downstream deps), do NOT write the detailed implementation plan here — jump directly to step 4.5, which writes a lightweight architectural plan (≤150 lines) covering only goal + block decomposition + subtask proposal, submits it for review, then splits subtasks and writes the detailed plan for `SUBTASKS[0]` only. This ordering prevents plans from ballooning to 250+ lines and reviews from failing to converge because the scope covers 3–8 deliverables at once.
+**First evaluate scope for step 4.5 splitting.** If `TARGET` matches the widened step 4.5 trigger (Story type OR Task/Epic with Story-scope description, no subtasks, no downstream deps), do not write a full-task plan here — jump directly to step 4.5, which writes a lightweight high-level architectural plan (≤150 lines) covering only the permitted scope plus subtask decomposition, submits it for review, then splits subtasks and writes a high-level plan for `SUBTASKS[0]` only. This ordering prevents plans from ballooning because the scope covers 3–8 deliverables at once.
 
-**Then check whether the issue already ships with a plan.** Inspect the issue's description body and its attachments (use the `/jira` skill to list attachments and download any plan-shaped files, e.g. `*plan*.md`, `*design*.md`, `*proposal*.pdf`). If a complete execution plan is already present, judge its quality and act as follows:
+**Then check whether the issue already ships with a plan.** Inspect the issue's description body and its attachments (use the `/jira` skill to list attachments and download any plan-shaped files, e.g. `*plan*.md`, `*design*.md`, `*proposal*.pdf`). Judge only the allowed high-level content; never copy implementation detail or code expression into the adopted plan. If a complete plan is already present, act as follows:
 
-- **High-quality, complete plan** (covers goal / affected files / change steps / test strategy / risks, and is aligned with the current codebase state): adopt it directly as `TARGET`'s plan, **skip steps 4 and 5** (no need to run `/multi-agent-review-plan` again, and no need to attach a duplicate plan file), briefly tell the user "the issue already has an approved plan attached, adopting it directly", then jump to step 6. Still write a copy of the adopted plan to `${project_root_dir}/tmp/jira-plan-<TARGET>.md` for local reference.
-- **Mostly complete but with minor gaps** (e.g. missing test strategy or risk section, or a few affected files are stale): fill in the gaps yourself to form the final plan, run `/multi-agent-review-plan` **once** as a sanity check, then continue with step 5.
-- **Only a rough idea / requirements outline / partial design** (not a real execution plan): treat as "no existing plan" and go through the normal step 3 -> step 4 flow below.
+- **High-quality, complete plan** (covers business goal / scope / non-goals, material technology choices, conceptual architecture, business flow, basic rules / boundaries / acceptance points, and relevant high-level risks): adopt its in-scope content directly as `TARGET`'s plan, **skip steps 4 and 5** (no need to run `/multi-agent-review-plan` again, and no need to attach a duplicate plan file), briefly tell the user "the issue already has an approved plan attached, adopting it directly", then jump to step 6. Still write a copy of the adopted high-level plan to `${project_root_dir}/tmp/jira-plan-<TARGET>.md` for local reference.
+- **Mostly complete but with minor high-level gaps** (for example a missing architecture boundary, business exception flow, or acceptance point): fill in only those in-scope gaps, run `/multi-agent-review-plan` **once** as a sanity check, then continue with step 5.
+- **Only a rough idea / requirements outline / partial design** (not a reviewable high-level plan): treat as "no existing plan" and go through the normal step 3 -> step 4 flow below.
 - **In doubt**: ask the user in one sentence "the issue already has document X attached, treat it as the final plan or run review again?" and follow the user's decision.
 
 If no existing plan is found, decide for yourself:
@@ -86,20 +87,22 @@ If no existing plan is found, decide for yourself:
 - If unsure, ask the user in one sentence: "Should I produce a plan before implementation?" If the user says no, skip review and go directly to step 6 (generally not recommended).
 
 The plan must include:
-- Goal (aligned with the JIRA issue's acceptance criteria)
-- Affected files / modules
-- Intent of each change step
-- Test strategy (which cases to add / modify and how to run them)
-- Risks and rollback
+- Business goal, scope, and non-goals (aligned with the JIRA issue's acceptance criteria)
+- Material technology selections, rationale, and high-level tradeoffs
+- Conceptual architecture: components, responsibilities, boundaries, ownership, dependencies, and interactions
+- Business direction and end-to-end flow, including realistic exception flows and conceptual state transitions
+- Basic business rules, invariants, boundary conditions, and acceptance points
+- High-level assumptions, risks, and open decisions only when they affect one of the areas above
 
-**Scope of the plan**: focus on business logic and flow (what the change achieves, which modules interact, data shape, state transitions, boundary rules, acceptance points). Do **not** include code implementation details such as concrete function signatures, snippets, variable names, loop / branch structure, or line-level pseudo-code. Implementation-level decisions belong in step 6 (writing code), not in the plan.
+**Hard scope boundary for the plan author**: include only technology selection, high-level architecture, business direction and flow, and basic business logic. Exclude affected files / repository modules, package / class / function / variable names, signatures, snippets, pseudocode, algorithm mechanics, schemas / tables / fields / DDL, endpoints / payloads, cache keys, queries, configuration keys / values, exact versions, flags, paths, commands, test cases / tooling, and line-level migration, rollback, concurrency, transaction, or error-handling mechanics. Mention reliability, consistency, security, compatibility, migration, or rollback only when it changes a high-level choice or business rule. If a statement requires code-shaped detail, remove it from the plan and defer it to steps 6–8.
 
 ### 4. `/multi-agent-review-plan` Review Loop
 
 **Do not skip this.** After writing the plan, immediately call `/multi-agent-review-plan` (the command distributes the plan to Codex + AntiGravity for read-only review).
 
 - Collect all reviewer feedback.
-- For reasonable issues: fix the plan, then run `/multi-agent-review-plan` again.
+- Discard every finding outside the same hard scope boundary, regardless of severity; do not keep it as a nit or add it to the plan.
+- For reasonable in-scope issues: fix the plan, then run `/multi-agent-review-plan` again.
 - Continue until the latest round has no new reasonable issues (reviewers explicitly approve or no longer raise new issues).
 
 **Only after approval may you enter step 5.**
@@ -114,16 +117,16 @@ The plan must include:
 
 If the conditions are not met, skip this step and continue directly to step 5.
 
-**Split happens BEFORE the detailed implementation plan is written**, not after. When the conditions are met, the flow is:
+**Split happens BEFORE the subtask-scoped high-level plan is written**, not after. When the conditions are met, the flow is:
 
-1. **Skip the detailed plan of step 3 for now** — instead write a lightweight **architectural plan** (≤150 lines) that covers only: goal, the 3–8 major data / module blocks the task touches, and a proposed subtask decomposition (2..N subtasks with acceptance points). Do NOT include per-subtask implementation detail, DDL, function names, cache patterns, config keys, or CLI flag syntax — those live in the per-subtask plan produced by the next run.
-2. Run `/multi-agent-review-plan` on this architectural plan. Convergence is expected in 1–2 rounds because the scope is deliberately small. If reviewers push toward implementation detail, apply Step 4's filter-4 (business-vs-implementation guard) aggressively.
+1. **Skip the full-task plan of step 3 for now** — instead write a lightweight **architectural plan** (≤150 lines) covering only the business goal, material technology choices, conceptual business / architecture blocks, their high-level flow, basic rules, and a proposed subtask decomposition (2..N functional slices with acceptance points). Apply the hard scope boundary; do not include per-subtask implementation detail or code expression.
+2. Run `/multi-agent-review-plan` on this architectural plan. Convergence is expected in 1–2 rounds because the scope is deliberately small. Discard any reviewer request that crosses the shared hard scope boundary.
 3. Once the architectural plan is approved, use the `/jira` skill to create that number of subtasks under the `TARGET` project (issuetype is usually "Task" / "Sub-task", depending on project configuration; ask the user if unsure), and make each new task a subtask of `TARGET` or link it back to `TARGET` with `is blocked by`. For each subtask, write a summary describing the delivered functional slice and copy the relevant section of the architectural plan into the description.
 4. Record the generated subtask key list as `SUBTASKS = [key1, key2, ...]`, ordered by dependency / implementation order.
 5. Add a comment to `TARGET` (the story / task): list all `SUBTASKS` and explain that they should be executed in order, one per run; this run will implement `SUBTASKS[0]` first, and the remaining subtasks should be handled by triggering this skill again later.
 6. Attach the architectural plan as an attachment to `TARGET` (once, for future linking).
 
-**Relock TARGET and write the subtask-1 plan**: after splitting, set `TARGET` to `SUBTASKS[0]`. Now write a **fresh implementation-level plan** for `SUBTASKS[0]` (this is the detailed plan step 3 would have produced, but scoped to one subtask); it should include the acceptance points, affected files, test strategy, and risks for `SUBTASKS[0]` only. Run `/multi-agent-review-plan` on this subtask plan. Convergence is again expected in 1–2 rounds; if it does not converge, apply the Step 4 filter-5 non-convergence guard and hand off to the user.
+**Relock TARGET and write the subtask-1 plan**: after splitting, set `TARGET` to `SUBTASKS[0]`. Write a fresh **high-level plan** for `SUBTASKS[0]` using the exact step 3 scope: technology selection, high-level architecture, business direction / flow, basic business logic, and relevant high-level risks for this subtask only. Do not add files, test implementation, or any other implementation detail. Run `/multi-agent-review-plan` on this subtask plan. Convergence is again expected in 1–2 rounds; if it does not converge, apply its non-convergence guard and hand off to the user.
 
 All "TARGET" references after this section (step 5 attachment, code, tests, review, commit, writeback) apply to this one subtask.
 
@@ -138,7 +141,7 @@ Do not write back status to the story / parent task itself during this run. When
 
 ### 6. Write Product Code
 
-Implement the plan section corresponding to the current `TARGET`. Follow the six CLAUDE.md rules (especially Rule 2, minimal changes, and Rule 3, read before writing).
+Implement the current `TARGET`'s approved outcome and acceptance scope. Decide all code-level details only now; do not retrofit them into the approved plan. Follow the six CLAUDE.md rules (especially Rule 2, minimal changes, and Rule 3, read before writing).
 
 **If step 4.5 splitting happened**: the current `TARGET = SUBTASKS[0]`, and code changes must cover only its acceptance scope. Do not modify files / modules for other subtasks ahead of time, and do not include "while I was here" changes in this commit; doing so breaks the traceability where each JIRA subtask maps to one commit.
 
@@ -198,6 +201,7 @@ Tell the user:
 
 - Do not start coding immediately after receiving an issue. Without checking the DAG first, you may discover later that fixing an upstream issue would have resolved it.
 - Do not write a plan and implement without review. `/multi-agent-review-plan` is a hard gate, and it catches many design issues at the lowest cost.
+- Do not turn the plan into an implementation recipe. Plan authors and reviewers must stay within technology selection, high-level architecture, business direction / flow, and basic business logic; implementation details and code expression belong only to implementation and code review.
 - Do not paste the plan into a JIRA comment instead of an attachment. Long body text harms traceability; use an attachment.
 - Do not change product code without tests. Passing tests does not prove the feature is correct, and future regressions will have no guardrail.
 - Do not cherry-pick easy reviewer issues from `/multi-agent-review-code` while skipping harder ones. Every new issue from a reviewer must either be fixed or explained in one sentence as not worth fixing, and the next reviewer round must accept that.
@@ -211,5 +215,5 @@ Tell the user:
 - Do not force the step 2.5 shortcut when the parent still has independent unfinished work. Closing it incorrectly hides real unfinished functionality. Stop, tell the user the parent still has unfinished work X, and ask them to add a subtask first.
 - Do not bundle multiple subtasks into one commit. Each JIRA subtask needs its own commit id for traceability, and mixed commits are hard to split later.
 - Do not trigger step 4.5 splitting for a root that already has subtasks / linked implementation tasks. Step 4.5 only applies to orphan roots (Story or Story-scope Task) with no subtasks and no downstream tasks; if subtasks already exist, use step 2's DAG logic and handle one open subtask.
-- Do not blindly rewrite a plan when the issue description / attachments already contain a complete execution plan. Adopt or fill in the gaps as described in step 3; forcing a re-plan wastes review budget and may drift from the reviewed design.
+- Do not blindly rewrite a plan when the issue description / attachments already contain a complete high-level plan. Adopt or fill in the gaps as described in step 3; forcing a re-plan wastes review budget and may drift from the reviewed design.
 - Do not skip `/multi-agent-review-plan` on a plan you wrote yourself just because "the issue also has an old plan attached". The step 3 skip is only for adopting the existing plan as-is; any plan you author or substantively edit must still pass the review gate.

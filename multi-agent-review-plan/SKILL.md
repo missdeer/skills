@@ -1,13 +1,28 @@
 ---
 name: multi-agent-review-plan
-description: Before implementation, send the current task's implementation plan to Codex + Antigravity in parallel for plan review -> aggregate feedback -> revise the plan -> review again until there are no new issues. Use this to align direction before coding and avoid discovering the direction was wrong only after implementation. Use when the user says "review my plan", "review the plan before coding", "run a dual review on the plan first", or "check whether this approach is okay". Reviewers only review; they do not edit files.
+description: Before implementation, send the current task's high-level plan to Codex + Antigravity in parallel for review, aggregate feedback, revise the plan, and review again until there are no new issues. Strictly limit both plan authoring and review to technology selection, high-level architecture, business direction and flow, and basic business logic; exclude implementation details and code expression. Use when the user says "review my plan", "review the plan before coding", "run a dual review on the plan first", or "check whether this approach is okay". Reviewers only review; they do not edit files.
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
-# multi-agent-review-plan - Dual-Reviewer Closed-Loop Review For Plans / Implementation Plans
+# multi-agent-review-plan - Dual-Reviewer Closed-Loop Review For High-Level Plans
 
-Use a dual Codex + Antigravity review **before writing code** to align direction. The goal is to avoid going the wrong way and discovering after implementation that the work must be redone.
+Use a dual Codex + Antigravity review **before writing code** to align direction. Review only decisions that must be settled before implementation; leave all implementation details to implementation and code review.
+
+## Hard Scope Contract (Plan Author + Reviewers + Aggregator)
+
+Apply this contract equally to the plan author, every reviewer, and the agent aggregating feedback. Do not relax it because a reviewer requests more detail.
+
+The plan may cover only:
+
+1. **Technology selection**: major language, framework, datastore, messaging, protocol, deployment-pattern, or third-party-service choices, with rationale and high-level tradeoffs.
+2. **High-level architecture**: conceptual components, responsibilities, boundaries, ownership, dependencies, and interaction direction.
+3. **Business direction and flow**: the intended outcome, actors, scope / non-goals, end-to-end main and exception flows, and conceptual state transitions.
+4. **Basic business logic**: business rules, invariants, boundary conditions, and acceptance points.
+
+Exclude all implementation detail and code expression, including affected files or repository modules, package / class / function / variable names, signatures, snippets, pseudocode, algorithm mechanics, schemas / tables / fields / DDL, endpoint or payload definitions, cache keys, queries, configuration keys / values, exact versions, CLI flags, paths, commands, test cases / tooling, and line-level migration, rollback, concurrency, transaction, or error-handling mechanics. Mention reliability, consistency, security, compatibility, migration, or rollback only when it changes a permitted high-level choice or business rule, and keep it at that level.
+
+If a statement requires code-shaped detail to explain or resolve, it is out of scope. The author must remove it; reviewers must not raise it, even as a nit; the aggregator must discard it rather than write it into the plan.
 
 ## Execution Mode: Dual Review / Single-Review Fallback / Sub-Reviewer Bypass
 
@@ -26,31 +41,29 @@ Before starting, determine which of the three scenarios applies to the agent cur
 
 ## Step 1 - Confirm There Is A Plan To Review
 
-- Complex or multi-step tasks: if the conversation does not yet contain a structured implementation plan, **write one first** (it can be produced in the current conversation; no need to persist it), covering: goal, breakdown steps, key decisions, affected files / modules, and verification method.
+- Complex or multi-step tasks: if the conversation does not yet contain a structured high-level plan, **write one first** (it can be produced in the current conversation; no need to persist it). Include only: business goal / scope / non-goals; material technology choices and rationale; conceptual architecture and interactions; business flow, states, rules, boundaries, and acceptance points; high-level assumptions, risks, and open decisions within the Hard Scope Contract.
 - Existing sufficient plan: skip the plan-writing step and use the existing plan directly.
 - If the task itself is trivial enough (1-2 steps, implemented in one pass), this skill does not apply; implement directly.
 
-**Scope of a reviewable plan**: the plan (and this review) covers business logic and flow only — what the change achieves, module interactions, data shape, state transitions, boundary / acceptance rules. It does **not** cover code implementation details (concrete function signatures, code snippets, variable names, loop / branch structure, line-level pseudo-code). If the incoming plan is largely implementation-level, ask the author to rewrite it at the business-logic level before reviewing; reviewers should also refrain from raising must-fix / should-fix items purely about code-level style or micro-implementation choices.
-
-**Pre-dispatch self-audit (main agent, MUST run before every dispatch)**: read the plan you are about to send and grep-check it for implementation-level content — concrete function / method / struct names (e.g. `Cache.DeletePattern`, `Config.Dewu.Reports.UseDailySummary2X`), specific pragmas / flags (e.g. `PRAGMA busy_timeout=5000`, `--dates a,b,c`), file paths / lock-file locations (e.g. `tmp/refresh-xxx.lock`), package-layout claims (e.g. "expose via `reportops.BuildXxx`"), literal pattern strings (e.g. `commerce:xxx:v2:module:*`), or specific test tooling commands (e.g. `go test -json | jq ...`). Delete every such line — the plan should describe *what business rule holds and what data flows* rather than *which function name / knob / pragma / path implements it*. If you find yourself unwilling to delete a line because "the reviewers asked for it", that's exactly the drift filter-4 in Step 4 exists to prevent — the previous reviewer round should not have kept those items as must/should-fix in the first place. Only after the self-audit passes should you proceed to Step 2.
+**Pre-dispatch self-audit (main agent, MUST run before every dispatch)**: compare every plan statement with the Hard Scope Contract. Remove affected-file lists, code identifiers, schemas, APIs, configuration, commands, tests, pseudocode, and implementation sequences. Replace implementation-shaped descriptions only when they can be expressed as a permitted technology choice, conceptual component interaction, business flow, or business rule; otherwise delete them. If the incoming plan is mostly implementation-level, rewrite it before review. Dispatch only after every remaining statement is in scope.
 
 ## Step 2 - Assemble The Shared Message Body
 
 Both reviewers use the same body, with only different prefix lines:
 
 ```
-Review the following implementation plan for correctness, coverage, and direction. The repo's coding standards are in CLAUDE.md (Go modernize idioms, surgical changes, minimal abstractions, no speculative abstractions). Check for:
-  1. Direction correctness - whether it addresses the real need and whether there is a more direct path
-  2. Step completeness - whether required steps are missing (migration, rollback, verification, cleanup)
-  3. Risks and boundaries - potential blast radius, compatibility, concurrency / transactions, data consistency
-  4. Dependencies and prerequisites - whether it assumes invalid premises or misses external constraints
-  5. Verifiability - how completion can be proven and whether the verification method is executable
+Review the following high-level plan for correctness, coverage, and direction. Review ONLY:
+  1. Technology selection - whether each material choice is suitable and whether its stated high-level tradeoffs are sound
+  2. High-level architecture - whether conceptual responsibilities, boundaries, ownership, dependencies, and interactions are coherent
+  3. Business direction and flow - whether the plan addresses the real need and covers realistic main / exception flows and conceptual state transitions
+  4. Basic business logic - whether business rules, invariants, boundaries, non-goals, and acceptance points are complete and mutually consistent
+  5. High-level assumptions and risks - only where they materially affect one of the four areas above
 
-Focus on issues that can realistically bite this project under its actual usage patterns and constraints. Do NOT raise must-fix / should-fix items for contrived scenarios — e.g. concurrency concerns on a single-writer nightly job, migration-rollback demands for a one-shot import, "what if the schema changes" on a table owned by this same repo. If you're unsure whether a scenario is realistic, classify as nit and state the assumed trigger condition so the main agent can judge.
+Within this scope, focus on issues that can realistically bite this project under its actual usage patterns and constraints. Do NOT raise must-fix / should-fix items for contrived high-level scenarios, such as global-scale architecture for a small internal tool, multi-tenant design for a permanently single-tenant product, or a new platform dependency for a one-shot workflow. If unsure whether an in-scope scenario is realistic, classify it as nit and state the assumed trigger condition.
 
-**Stay at the business-logic layer.** A plan is reviewed for direction and correctness, not for implementation choices. Do NOT raise must-fix / should-fix items about: concrete function / method / struct names, cache-client API surface (e.g. `DeletePattern` vs `Del`), specific DB pragmas (`PRAGMA busy_timeout=...`), exact CLI flag syntax, file paths / lock-file locations, package layout / where a helper should live, testing tooling (e.g. `go test -json | jq`), configuration format (env var vs JSON key vs YAML). These belong in code review after implementation, not in plan review. If the plan already contains such implementation-level content, note in a nit that "these implementation details should be moved out of the plan"; do not open must/should-fix threads on them.
+**Hard boundary:** do not discuss or request implementation details or code expression. Do not comment on files / repository modules, code organization, symbols, signatures, snippets, pseudocode, algorithm mechanics, schemas / fields / DDL, APIs / payloads, cache keys, queries, configuration, exact versions, flags, paths, commands, tests / tooling, or low-level operational mechanics. If such content remains in the plan, ignore it. Do not mention it even as a nit. If a finding can only be explained or fixed with those details, omit the finding entirely; it belongs in implementation or code review.
 
-You are reviewing; do NOT propose code edits or modify any files — list findings only, each with a one-sentence rationale. Classify each as must-fix / should-fix / nit.
+You are reviewing; do NOT propose implementation steps, code edits, or file changes, and do not modify any files. List only in-scope findings, each with a one-sentence high-level rationale. Classify each as must-fix / should-fix / nit. Return "no in-scope findings" when appropriate.
 
 Plan under review:
 <PLAN_TEXT>
@@ -66,7 +79,7 @@ Previously dismissed items (do not re-raise unless you have new evidence that ma
 
 | Reviewer | Prefix line | Perspective |
 |---|---|---|
-| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform the review yourself and output findings only. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Just review and return.` | Deep technical review, edge cases, line-level correctness |
+| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform the review yourself and output findings only. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Just review and return.` | Technology choices, architecture coherence, and business-logic edge cases at the high-level-plan scope |
 | Antigravity | `Do NOT run any git write commands (commit, push, reset, etc.). Git repository is read-only for you. Do NOT modify any files. Read-only operations only — provide findings as text/diff in your response.` | High-level architecture, design consistency, alternative angles |
 
 Transport:
@@ -90,17 +103,17 @@ Transport:
 
 ## Step 4 - Aggregate Feedback And Update The Plan
 
-- **Deduplicate**: merge the same root cause identified by both reviewers into one item, and note when both found it.
-- **Reclassify** into **must-fix / should-fix / nit**: must-fix = at least one reviewer marks it must-fix **and** the main agent independently judges the issue would affect plan validity; should-fix = at least one reviewer marks it should-fix (or must-fix reclassified down) **and** the main agent judges it worth incorporating. Reviewers can be wrong; be willing to disagree.
-- **Soft circuit breaker — filter unrealistic items before updating the plan** (the main agent MUST apply, in order):
-  1. **Realistic-likelihood filter**: downgrade to nit (or drop entirely) any item whose triggering condition is nearly impossible under this project's real usage — e.g. concurrency concerns on a nightly single-writer batch job, "what if the DB schema changes" on a table owned by this same repo, migration-rollback demands for a one-shot import. Ask: "Under what realistic scenario does this bite us?" If the answer is contrived, do not incorporate it.
-  2. **Divergence guard**: reviewers are told about previously dismissed items via `<DISMISSED_LIST>` in Step 2, so this filter is a backstop. If a new round's must-fix / should-fix items are the same *category* as items already dismissed in earlier rounds (a reviewer re-raising the same pattern without new evidence), dismiss them by reference and do not re-litigate.
-  3. **Scope-creep guard**: downgrade should-fix items that would materially expand the plan's scope beyond the stated goal (adding new features, new abstractions, adjacent refactors). Rule 2 of CLAUDE.md applies to plan reviews too.
-  4. **Business-vs-implementation guard**: downgrade to nit — do NOT write into the plan — any item whose subject is a code-level choice: concrete function / method / variable / struct names, cache-client API surface, DB pragmas, exact CLI flag syntax, file paths / lock-file locations, package layout, testing tool syntax, config format details, specific pattern strings, or specific lint / vet commands. Even when the reviewer marks it must-fix, if the *substance* is "which knob to turn / which name to use / how to wire it", it belongs in code review. Ask: "Is this a business-rule error or an implementation choice?" If implementation, filter it. The plan should describe *what data flows and business rules hold*; it should NOT describe *which function has which signature or which pragma to set*.
-  5. **Plan-bloat / non-convergence guard**: if the current plan length is > 1.5× the round-1 plan length, OR round N's must-fix count is not strictly less than round N-1's, stop looping and report to the user. Do not silently continue. Likely causes: the plan has drifted into implementation details (see filter 4), OR the task is Story-scope and should be split into subtasks before individual-subtask plans are reviewed. Ask the user which recovery path to take before continuing.
-  6. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
+- **Apply the Hard Scope Contract first**: discard every out-of-scope finding before deduplication or classification, regardless of reviewer severity. Do not downgrade it to nit, report it as an open decision, repeat its implementation detail, or write it into the plan. In the aggregation summary, state only how many findings were discarded as implementation detail.
+- **Deduplicate the remaining in-scope findings**: merge the same root cause identified by both reviewers into one item, and note when both found it.
+- **Reclassify the remaining findings** into **must-fix / should-fix / nit**: must-fix = at least one reviewer marks it must-fix **and** the main agent independently judges the issue would affect high-level plan validity; should-fix = at least one reviewer marks it should-fix (or must-fix reclassified down) **and** the main agent judges it worth incorporating. Reviewers can be wrong; be willing to disagree.
+- **Apply these additional gates before updating the plan** (the main agent MUST apply them in order):
+  1. **Realistic-likelihood filter**: downgrade to nit (or drop entirely) any in-scope item whose triggering condition is nearly impossible under this project's real usage. Ask: "Under what realistic scenario does this affect the selected technology, high-level architecture, business flow, or basic business rule?" If the answer is contrived, do not incorporate it.
+  2. **Divergence guard**: if a new round repeats an item already dismissed without materially new high-level evidence, dismiss it by reference and do not re-litigate.
+  3. **Goal scope-creep guard**: downgrade in-scope should-fix items that materially expand the stated business goal by adding features, architectural capabilities, or adjacent work.
+  4. **Plan-bloat / non-convergence guard**: if the current plan length is > 1.5× the round-1 plan length, OR round N's must-fix count is not strictly less than round N-1's, stop looping and report to the user. Likely causes are scope drift or a Story-scope task that should be split. Ask the user which recovery path to take before continuing.
+  5. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
 - Report the aggregated list — including downgrades and drops with reasons — to the user in **Chinese**.
-- **Modify the plan for both must-fix and should-fix items**; leave nit items for the user to decide.
+- **Modify the plan for in-scope must-fix and should-fix items only**; leave in-scope nit items for the user to decide. Never satisfy feedback by adding implementation detail.
 - After updating the plan, increment the round count and return to Step 2 for another review.
 
 ## Step 5 - Exit Conditions
@@ -108,9 +121,9 @@ Transport:
 **Stop** when any of the following is true:
 - Must-fix count AND should-fix count after aggregation in the current round are both 0.
 - The main agent judges all remaining must-fix and should-fix items invalid and gives reasons.
-- The Step 4 filter-5 (Plan-bloat / non-convergence guard) fires — pause and hand off to the user with recovery options, do not continue looping until the user picks one.
+- The Step 4 Plan-bloat / non-convergence guard fires — pause and hand off to the user with recovery options, do not continue looping until the user picks one.
 
-There is **no hard round cap** — keep looping as long as new must-fix or should-fix items keep appearing, **but** filter-5 will terminate a runaway loop before it consumes many rounds. Typical healthy convergence is 2–3 rounds; if you are past round 3 and still adding must-fix items, that is a signal that the plan-vs-review scope is mismatched.
+There is **no hard round cap** — keep looping as long as new in-scope must-fix or should-fix items keep appearing, **but** the non-convergence guard will terminate a runaway loop before it consumes many rounds. Typical healthy convergence is 2–3 rounds; if you are past round 3 and still adding must-fix items, that is a signal that the plan-vs-review scope is mismatched.
 
 ## Final Report (Chinese)
 
