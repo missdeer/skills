@@ -1,8 +1,8 @@
 ---
 name: multi-agent-review-code
-description: Use Codex + Antigravity as dual reviewers in parallel to review a pending diff (or branch-vs-master diff) -> aggregate and deduplicate -> fix only must-fix items -> review again until there are no new issues or the round limit is reached. This is a heavyweight ship-readiness quality gate before release / merge. Use when the user says "review this", "run a dual review before merging", "scan once before shipping", or "run a review loop". Optional focus instructions are passed through via arguments.
+description: Use Codex + Antigravity as static-source reviewers in parallel to review a pending diff or branch-vs-master diff, aggregate and deduplicate findings, fix must-fix and should-fix items, and review again until clean. Reviewers may inspect source and git metadata only; they never build, test, install, run, format, lint, or analyze the project. The main agent must allow each live reviewer up to 30 minutes to finish. Use for heavyweight ship-readiness review before release or merge.
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # multi-agent-review-code - Dual-Reviewer Ship-Readiness Loop
@@ -25,6 +25,16 @@ Before starting, determine which of the three scenarios applies to the agent cur
   - Otherwise → **default dual-review**.
 
 **Round budget**: unlimited review->fix rounds until the current round has no must-fix AND no should-fix items, or one of the Exit conditions below is triggered. Do **not** cap by round count.
+
+## Static Review And Waiting Contract (Hard Gate)
+
+- Reviewers perform **static source review only**. They may read source files, repository instructions, git status, logs, and diffs with read-only inspection commands.
+- Reviewers must **never** build, compile, reconfigure, install, package, test, execute project binaries or scripts, format, lint, or run static/dynamic analyzers. This prohibition applies even when a reviewer believes verification would strengthen a finding.
+- The main agent owns all build, test, formatter, linter, analyzer, and runtime verification outside reviewer sessions. After fixing findings, the main agent may run appropriate verification before dispatching the next static review round.
+- Every reviewer prompt must repeat these restrictions explicitly. A generic "read-only" instruction is insufficient because builds and tests can still mutate generated outputs.
+- Give every live reviewer the full configured allowance of up to **30 minutes**. Use an outer timeout of at least `1800000` ms and a reviewer timeout of `30m` where supported.
+- When a reviewer call yields a live task or cell, keep waiting on that same task/cell in intervals no longer than 60 seconds until it completes or 30 minutes have elapsed since dispatch. Several minutes without output is normal and is not a reason to interrupt, terminate, retry, or launch a duplicate reviewer.
+- End the wait early only when the reviewer completes, the reviewer process explicitly exits with an error, the user asks to stop, or the actual 30-minute deadline expires. Never kill a live reviewer merely because it appears slow.
 
 ## Per-Round Steps
 
@@ -53,6 +63,8 @@ Focus on issues that can realistically occur under this project's actual usage p
 
 You are reviewing; do NOT propose code edits — list findings only, each with file:line and a one-sentence rationale. Classify each as must-fix / should-fix / nit.
 
+STATIC SOURCE REVIEW ONLY. You may inspect source, repository instructions, git metadata, and diffs with read-only commands. Do NOT build, compile, reconfigure, install, package, test, run binaries or scripts, format, lint, or run analyzers. Do not modify files or generated outputs. The main agent performs verification separately.
+
 Focus instruction from user (may be empty): <ARGS>
 
 Previously dismissed items (do not re-raise unless you have new evidence that materially changes the judgment): <DISMISSED_LIST>
@@ -66,8 +78,8 @@ Both reviewers use the same body, each with its own prefix line:
 
 | Reviewer | Prefix line | Perspective |
 |---|---|---|
-| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform the review yourself and output findings only. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Just review and return.` | Deep technical review, edge cases, line-level correctness |
-| Antigravity | `Do NOT run any git write commands (commit, push, reset, etc.). Git repository is read-only for you. Do NOT modify any files. Read-only operations only — provide findings as text/diff in your response.` | High-level architecture, design consistency, alternative angles |
+| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform a static source review yourself and output findings only. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Do NOT build, test, install, execute, format, lint, or run analyzers. Read source and git metadata only; then review and return.` | Deep technical review, edge cases, line-level correctness |
+| Antigravity | `STATIC SOURCE REVIEW ONLY. Do NOT build, test, install, execute, format, lint, or run analyzers. Do NOT run any git write commands (commit, push, reset, etc.). Git repository and generated outputs are read-only for you. Inspect source and git metadata only, and provide findings as text in your response.` | High-level architecture, design consistency, alternative angles |
 
 Transport:
 - Write prompts to `./tmp/review-codex-prompt-<ts>.txt` and `./tmp/review-agy-prompt-<ts>.txt` respectively (fallback mode only needs the agy prompt).
@@ -84,7 +96,7 @@ Transport:
   ```bash
   bash -lc "agy-wrapper --dangerously-skip-permissions --timeout 30m -p \"\$(bat --plain --paging=never ./tmp/review-agy-prompt-<ts>.txt)\""
   ```
-- Poll results with `TaskOutput`, and delete temporary files after completion.
+- Poll results with `TaskOutput` (or the environment's equivalent wait primitive) at intervals no longer than 60 seconds. Continue waiting on the same live reviewer for up to 30 minutes; do not terminate or duplicate it because it is quiet or slow. Delete temporary files only after the reviewer has completed or the true 30-minute deadline has expired.
 - If one CLI (for example `agy-wrapper`) is not on PATH, **tell the user** and continue with the remaining reviewer. Do not pretend the missing reviewer also passed. In fallback mode, if `agy-wrapper` is missing, tell the user this round cannot be reviewed; do not fall back to Codex self-review.
 
 ### 4. Aggregate Findings
@@ -102,6 +114,7 @@ Transport:
 
 - **Fix both must-fix and should-fix items**; leave nit items for the user to decide.
 - Follow CLAUDE.md Rule 2: minimal surgical changes, no opportunistic surrounding refactors.
+- Run any necessary build, tests, formatting, linting, analysis, or runtime verification as the main agent. Never delegate verification to a reviewer.
 - After fixing, increment the round count and return to Step 1.
 
 ### 6. Exit Conditions
