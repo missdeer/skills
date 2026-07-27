@@ -2,7 +2,7 @@
 name: jira-issue-resolver
 description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root, producing and reviewing a high-level plan, attaching the plan, coding and testing, reviewing code, committing, and writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
 metadata:
-  version: "1.3.0"
+  version: "1.4.0"
 ---
 
 # jira-issue-resolver
@@ -27,6 +27,7 @@ Start this workflow only when an issue key can be parsed (shape: `PROJECT-123`).
 5. **Use the real git commit value for JIRA writeback**: obtain the commit id from `git log -1 --format=%H`; do not rely on memory or reuse a previous hash.
 6. **The plan file must be attached to JIRA**: do not paste it into the body. Upload it as an attachment through the `/jira` skill's attachment interface.
 7. **Keep every plan and plan review high-level**: both the plan author and reviewers must limit themselves to technology selection, high-level architecture, business direction and flow, and basic business logic. Never put implementation details or code expression into a plan, and never accept reviewer feedback that asks for them.
+8. **Restraint on splitting and plan scope**: creating linked tasks under a story or subtasks under a task is a heavy operation — carefully evaluate necessity and do not diverge for minor issues. When in doubt, do not split. Plans and plan reviews must stay tight and focused: cover only realistic mainstream flows and the exception flows that actually change a business decision. Do not enumerate hypothetical edge cases, do not expand into peripheral concerns, and reject reviewer requests that push either direction — regardless of severity label.
 
 ## Steps
 
@@ -96,13 +97,16 @@ The plan must include:
 
 **Hard scope boundary for the plan author**: include only technology selection, high-level architecture, business direction and flow, and basic business logic. Exclude affected files / repository modules, package / class / function / variable names, signatures, snippets, pseudocode, algorithm mechanics, schemas / tables / fields / DDL, endpoints / payloads, cache keys, queries, configuration keys / values, exact versions, flags, paths, commands, test cases / tooling, and line-level migration, rollback, concurrency, transaction, or error-handling mechanics. Mention reliability, consistency, security, compatibility, migration, or rollback only when it changes a high-level choice or business rule. If a statement requires code-shaped detail, remove it from the plan and defer it to steps 6–8.
 
+**Length and focus discipline**: keep the plan compact and dense — typically ≤200 lines for a full plan, ≤150 lines for the step 4.5 architectural plan. Cover only realistic mainstream flows and the exception flows that actually change a business decision. Do not enumerate hypothetical edge cases, do not preemptively design for imagined future requirements, do not expand into peripheral areas outside the JIRA acceptance criteria, and do not repeat the same point in different sections. If a section grows beyond one screen, cut it before submitting for review.
+
 ### 4. `/multi-agent-review-plan` Review Loop
 
 **Do not skip this.** After writing the plan, immediately call `/multi-agent-review-plan` (the command distributes the plan to Codex + AntiGravity for read-only review).
 
 - Collect all reviewer feedback.
 - Discard every finding outside the same hard scope boundary, regardless of severity; do not keep it as a nit or add it to the plan.
-- For reasonable in-scope issues: fix the plan, then run `/multi-agent-review-plan` again.
+- Discard reviewer requests that push the plan to enumerate more hypothetical edge cases, speculative failure modes, or peripheral concerns outside the JIRA acceptance criteria — regardless of severity label. Realism and business relevance override completeness.
+- For reasonable in-scope issues: fix the plan, then run `/multi-agent-review-plan` again. Prefer tightening the plan over growing it; if a fix can be expressed by removing or condensing content, do that instead of adding new sections.
 - Continue until the latest round has no new reasonable issues (reviewers explicitly approve or no longer raise new issues).
 
 **Only after approval may you enter step 5.**
@@ -116,6 +120,8 @@ The plan must include:
   - `TARGET.issuetype` is "Task" / "任务" / "Epic" but its **scope is Story-equivalent**: the description spans ≥3 loosely coupled deliverables (e.g. multiple tabs, multiple new fact tables, multiple independent modules), or the expected diff is ≥800 lines / touches ≥6 files (rough estimate from the plan or from analogous prior tickets in the same project). If unsure, ask the user in one sentence "this task looks Story-scope — split into subtasks first, or handle in one commit?" and follow their decision.
 
 If the conditions are not met, skip this step and continue directly to step 5.
+
+**Restraint principle**: subtask creation adds JIRA overhead, forces multiple runs, and delays delivery. Split only when the work genuinely cannot land as one coherent commit. If a Story-scope root can be delivered in a single reviewable commit with clear structure (even ~800–1200 lines), prefer to keep it whole. When in doubt, ask the user in one sentence — do not default to split. Also keep the decomposition itself minimal: prefer the smallest number of subtasks that carve the work along real functional boundaries (usually 2–4), never split for symmetry or "one per file" reasons.
 
 **Split happens BEFORE the subtask-scoped high-level plan is written**, not after. When the conditions are met, the flow is:
 
@@ -217,3 +223,7 @@ Tell the user:
 - Do not trigger step 4.5 splitting for a root that already has subtasks / linked implementation tasks. Step 4.5 only applies to orphan roots (Story or Story-scope Task) with no subtasks and no downstream tasks; if subtasks already exist, use step 2's DAG logic and handle one open subtask.
 - Do not blindly rewrite a plan when the issue description / attachments already contain a complete high-level plan. Adopt or fill in the gaps as described in step 3; forcing a re-plan wastes review budget and may drift from the reviewed design.
 - Do not skip `/multi-agent-review-plan` on a plan you wrote yourself just because "the issue also has an old plan attached". The step 3 skip is only for adopting the existing plan as-is; any plan you author or substantively edit must still pass the review gate.
+- Do not create linked tasks or subtasks casually. Splitting is a heavy operation and must be justified by real inability to deliver as one commit; do not diverge into subtask creation over minor issues, and prefer keeping work whole when in doubt.
+- Do not let plans balloon with hypothetical edge cases, speculative failure modes, or peripheral concerns. Keep plans compact and focused on realistic mainstream flows plus the exception flows that actually change a business decision.
+- Do not accept reviewer feedback that pushes plans to enumerate more edge cases or expand into peripheral areas, even when labeled high-severity. Discard such requests; realism and business relevance override completeness.
+- Do not answer reviewer feedback by growing the plan when tightening or removing content would resolve it just as well. Length is not evidence of quality.
