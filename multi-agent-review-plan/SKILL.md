@@ -90,12 +90,12 @@ Transport:
   bash -lc "codex exec -s read-only --skip-git-repo-check \"\$(bat --plain --paging=never ./tmp/review-plan-codex-prompt-<ts>.txt)\""
   ```
   ```bash
-  bash -lc "agy-wrapper --dangerously-skip-permissions --timeout 30m -p \"\$(bat --plain --paging=never ./tmp/review-plan-agy-prompt-<ts>.txt)\""
+  bash -lc "agy-wrapper --dangerously-skip-permissions --timeout 30m --print-timeout 30m -p \"\$(bat --plain --paging=never ./tmp/review-plan-agy-prompt-<ts>.txt)\""
   ```
   Continue to Step 4 only after both return.
 - **Single-review fallback mode (executor is Codex CLI)**: run only one path (still wrapped in `bash -lc "..."`):
   ```bash
-  bash -lc "agy-wrapper --dangerously-skip-permissions --timeout 30m -p \"\$(bat --plain --paging=never ./tmp/review-plan-agy-prompt-<ts>.txt)\""
+  bash -lc "agy-wrapper --dangerously-skip-permissions --timeout 30m --print-timeout 30m -p \"\$(bat --plain --paging=never ./tmp/review-plan-agy-prompt-<ts>.txt)\""
   ```
 - Poll results with `TaskOutput`, and delete temporary files after completion.
 - If one CLI is missing (for example `agy-wrapper` is not on PATH), tell the user and continue with the remaining reviewer. Do not pretend the missing reviewer also passed. In fallback mode, if `agy-wrapper` is missing, tell the user this round cannot be reviewed; do not fall back to Codex self-review.

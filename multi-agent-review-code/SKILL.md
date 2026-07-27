@@ -89,12 +89,12 @@ Transport:
   bash -lc "codex exec -s read-only --skip-git-repo-check \"\$(bat --plain --paging=never ./tmp/review-codex-prompt-<ts>.txt)\""
   ```
   ```bash
-  bash -lc "agy-wrapper --dangerously-skip-permissions --timeout 30m -p \"\$(bat --plain --paging=never ./tmp/review-agy-prompt-<ts>.txt)\""
+  bash -lc "agy-wrapper --dangerously-skip-permissions --timeout 30m --print-timeout 30m -p \"\$(bat --plain --paging=never ./tmp/review-agy-prompt-<ts>.txt)\""
   ```
   Continue to Step 4 only after both return.
 - **Single-review fallback mode (executor is Codex CLI)**: run only one path (still wrapped in `bash -lc "..."`):
   ```bash
-  bash -lc "agy-wrapper --dangerously-skip-permissions --timeout 30m -p \"\$(bat --plain --paging=never ./tmp/review-agy-prompt-<ts>.txt)\""
+  bash -lc "agy-wrapper --dangerously-skip-permissions --timeout 30m --print-timeout 30m -p \"\$(bat --plain --paging=never ./tmp/review-agy-prompt-<ts>.txt)\""
   ```
 - Poll results with `TaskOutput` (or the environment's equivalent wait primitive) at intervals no longer than 60 seconds. Continue waiting on the same live reviewer for up to 30 minutes; do not terminate or duplicate it because it is quiet or slow. Delete temporary files only after the reviewer has completed or the true 30-minute deadline has expired.
 - If one CLI (for example `agy-wrapper`) is not on PATH, **tell the user** and continue with the remaining reviewer. Do not pretend the missing reviewer also passed. In fallback mode, if `agy-wrapper` is missing, tell the user this round cannot be reviewed; do not fall back to Codex self-review.
