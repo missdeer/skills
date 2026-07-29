@@ -2,7 +2,7 @@
 name: jira-issue-resolver
 description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root, producing and reviewing a high-level plan, attaching the plan, coding and testing, reviewing code, committing, and writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
 metadata:
-  version: "1.4.0"
+  version: "1.5.0"
 ---
 
 # jira-issue-resolver
@@ -26,8 +26,11 @@ Start this workflow only when an issue key can be parsed (shape: `PROJECT-123`).
 4. **Do not commit until `/multi-agent-review-code` converges**: as long as reviewers raise new issues in the `/multi-agent-review-code` loop, keep fixing and reviewing until a full round returns with no new issues. Reintroduced old issues also count as new issues.
 5. **Use the real git commit value for JIRA writeback**: obtain the commit id from `git log -1 --format=%H`; do not rely on memory or reuse a previous hash.
 6. **The plan file must be attached to JIRA**: do not paste it into the body. Upload it as an attachment through the `/jira` skill's attachment interface.
-7. **Keep every plan and plan review high-level**: both the plan author and reviewers must limit themselves to technology selection, high-level architecture, business direction and flow, and basic business logic. Never put implementation details or code expression into a plan, and never accept reviewer feedback that asks for them.
-8. **Restraint on splitting and plan scope**: creating linked tasks under a story or subtasks under a task is a heavy operation — carefully evaluate necessity and do not diverge for minor issues. When in doubt, do not split. Plans and plan reviews must stay tight and focused: cover only realistic mainstream flows and the exception flows that actually change a business decision. Do not enumerate hypothetical edge cases, do not expand into peripheral concerns, and reject reviewer requests that push either direction — regardless of severity label.
+Invariants 7-9 constrain three independent axes — **depth** (how far down), **breadth** (how far out), **granularity** (how many pieces). A plan can satisfy one and violate another, so check all three.
+
+7. **Depth — keep every plan and plan review high-level**: both the plan author and reviewers must limit themselves to technology selection, high-level architecture, business direction and flow, and basic business logic. Never put implementation details or code expression into a plan, and never accept reviewer feedback that asks for them.
+8. **Breadth — scope is defined by the JIRA issue, and only by it**: the plan answers exactly what `TARGET`'s description and acceptance criteria ask, nothing more. Content that does not trace back to a line in the issue is out of scope by default and must be removed — including hypothetical edge cases, speculative failure modes, and peripheral concerns. This binds the plan author and every reviewer equally: the default answer to "should we also cover X?" is **no** unless X is required to satisfy the stated acceptance criteria, and out-of-scope reviewer requests are discarded regardless of severity label. Work subtract-first — when a round ends with the plan longer than it started, justify it in one sentence or revert the growth.
+9. **Granularity — restraint on splitting**: creating linked tasks under a story or subtasks under a task is a heavy operation that forces multiple runs and delays delivery. Carefully evaluate necessity, never split over minor issues, and when in doubt do not split (see step 4.5).
 
 ## Steps
 
@@ -97,17 +100,31 @@ The plan must include:
 
 **Hard scope boundary for the plan author**: include only technology selection, high-level architecture, business direction and flow, and basic business logic. Exclude affected files / repository modules, package / class / function / variable names, signatures, snippets, pseudocode, algorithm mechanics, schemas / tables / fields / DDL, endpoints / payloads, cache keys, queries, configuration keys / values, exact versions, flags, paths, commands, test cases / tooling, and line-level migration, rollback, concurrency, transaction, or error-handling mechanics. Mention reliability, consistency, security, compatibility, migration, or rollback only when it changes a high-level choice or business rule. If a statement requires code-shaped detail, remove it from the plan and defer it to steps 6–8.
 
-**Length and focus discipline**: keep the plan compact and dense — typically ≤200 lines for a full plan, ≤150 lines for the step 4.5 architectural plan. Cover only realistic mainstream flows and the exception flows that actually change a business decision. Do not enumerate hypothetical edge cases, do not preemptively design for imagined future requirements, do not expand into peripheral areas outside the JIRA acceptance criteria, and do not repeat the same point in different sections. If a section grows beyond one screen, cut it before submitting for review.
+**Length and focus discipline**: 200 lines for a full plan and 150 for the step 4.5 architectural plan are **hard ceilings, not targets** — most plans should land at 60–120 lines, and hitting the ceiling is a signal to cut, not a sign of thoroughness. Cover only realistic mainstream flows and the exception flows that actually change a business decision. Do not enumerate hypothetical edge cases, do not preemptively design for imagined future requirements, do not expand into peripheral areas outside the JIRA acceptance criteria, and do not repeat the same point in different sections. If a section grows beyond one screen, cut it before submitting for review.
+
+**Expression discipline — write points, not prose**: a plan is a decision record, not a document explaining the decisions. Same content written as narrative runs several times longer and buries what matters.
+
+- **Bullets, not paragraphs.** One idea per bullet, one line where possible, two lines maximum. No multi-paragraph sections.
+- **State conclusions, not deliberation.** Write "uses X" — not the comparison of X / Y / Z that led there. Record a tradeoff only when the tradeoff itself is the decision the reader must understand.
+- **Cut all connective prose**: background, preamble, restating the JIRA description, motivational framing, and hedges like "in order to ensure that" / "it is important to note that". Delete the sentence, keep the noun.
+- **Structured content goes in a table or list**, never in a narrative sentence that enumerates.
+- **Nesting deeper than two levels means you have drifted into detail.** Flatten it or delete it.
+
+Rule of thumb: if a reader who knows the codebase cannot skim the plan in two minutes and restate every decision, it is too wordy — regardless of whether it is under the line ceiling.
+
+**Traceability test before submitting**: for every bullet in the plan, name the line of the JIRA description / acceptance criteria it serves. If you cannot, delete the bullet. Sections that exist only because "a plan usually has one" (generic risk lists, boilerplate non-goals, observability / rollout / migration prose that no acceptance criterion asks for) are the most common source of bloat — omit them rather than filling them in. A plan that is shorter than expected but fully traceable is correct; a plan that is complete-looking but partly untraceable is not.
 
 ### 4. `/multi-agent-review-plan` Review Loop
 
 **Do not skip this.** After writing the plan, immediately call `/multi-agent-review-plan` (the command distributes the plan to Codex + AntiGravity for read-only review).
 
 - Collect all reviewer feedback.
-- Discard every finding outside the same hard scope boundary, regardless of severity; do not keep it as a nit or add it to the plan.
-- Discard reviewer requests that push the plan to enumerate more hypothetical edge cases, speculative failure modes, or peripheral concerns outside the JIRA acceptance criteria — regardless of severity label. Realism and business relevance override completeness.
-- For reasonable in-scope issues: fix the plan, then run `/multi-agent-review-plan` again. Prefer tightening the plan over growing it; if a fix can be expressed by removing or condensing content, do that instead of adding new sections.
-- Continue until the latest round has no new reasonable issues (reviewers explicitly approve or no longer raise new issues).
+- **Triage every finding before acting on it.** A finding is actionable only if it is inside the hard scope boundary **and** traces to a line of the JIRA description / acceptance criteria. Everything else is discarded outright — regardless of severity label, and regardless of how many reviewers raised it. Reviewer consensus is not evidence of relevance; two reviewers can be out of scope simultaneously.
+- Discard, without adding a nit or a "for completeness" note: findings that ask for implementation detail or code expression, that enumerate more hypothetical edge cases or speculative failure modes, that expand into peripheral concerns outside the acceptance criteria, or that propose designing for anticipated future requirements.
+- Adopt a discarded finding only if the user explicitly asks for it. Do not negotiate with reviewers by partially accepting an out-of-scope request in a shortened form.
+- For actionable in-scope issues: fix the plan, then run `/multi-agent-review-plan` again. Prefer tightening the plan over growing it; if a fix can be expressed by removing or condensing content, do that instead of adding new sections.
+- Continue until the latest round has no new actionable issues. Rounds that produce only discarded findings count as convergence — do not keep looping to satisfy reviewers on out-of-scope points.
+- Record discards briefly (one line each) so the user can see what was rejected and why, but keep them out of the plan file itself.
 
 **Only after approval may you enter step 5.**
 
@@ -224,6 +241,8 @@ Tell the user:
 - Do not blindly rewrite a plan when the issue description / attachments already contain a complete high-level plan. Adopt or fill in the gaps as described in step 3; forcing a re-plan wastes review budget and may drift from the reviewed design.
 - Do not skip `/multi-agent-review-plan` on a plan you wrote yourself just because "the issue also has an old plan attached". The step 3 skip is only for adopting the existing plan as-is; any plan you author or substantively edit must still pass the review gate.
 - Do not create linked tasks or subtasks casually. Splitting is a heavy operation and must be justified by real inability to deliver as one commit; do not diverge into subtask creation over minor issues, and prefer keeping work whole when in doubt.
-- Do not let plans balloon with hypothetical edge cases, speculative failure modes, or peripheral concerns. Keep plans compact and focused on realistic mainstream flows plus the exception flows that actually change a business decision.
-- Do not accept reviewer feedback that pushes plans to enumerate more edge cases or expand into peripheral areas, even when labeled high-severity. Discard such requests; realism and business relevance override completeness.
-- Do not answer reviewer feedback by growing the plan when tightening or removing content would resolve it just as well. Length is not evidence of quality.
+- Do not let plans balloon with hypothetical edge cases, speculative failure modes, or peripheral concerns — whether you wrote them yourself or a reviewer asked for them. Realism and business relevance override completeness, regardless of severity label.
+- Do not treat reviewer consensus as proof that a finding is in scope. Multiple reviewers can be out of scope simultaneously; discard and move on rather than looping to appease them.
+- Do not accept an out-of-scope reviewer request in condensed form as a compromise. Partial adoption is still scope divergence; only the user can pull something back into scope.
+- Do not answer reviewer feedback by growing the plan when tightening or removing content resolves it just as well, and do not add a section just because a plan template usually has one. Length is not evidence of quality.
+- Do not write the plan as narrative prose. Points, not paragraphs; conclusions, not deliberation. Explaining a decision at length is not the same as making it clearly, and the prose form is what lets an in-scope plan still balloon past its ceiling.

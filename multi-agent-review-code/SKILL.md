@@ -2,12 +2,24 @@
 name: multi-agent-review-code
 description: Use Codex + Antigravity as static-source reviewers in parallel to review a pending diff or branch-vs-master diff, aggregate and deduplicate findings, fix must-fix and should-fix items, and review again until clean. Reviewers may inspect source and git metadata only; they never build, test, install, run, format, lint, or analyze the project. The main agent must allow each live reviewer up to 30 minutes to finish. Use for heavyweight ship-readiness review before release or merge.
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # multi-agent-review-code - Dual-Reviewer Ship-Readiness Loop
 
 Heavyweight quality gate: Codex + Antigravity review the pending diff in parallel -> aggregate -> fix only must-fix items -> review again, looping until clean or the limit is reached.
+
+## Hard Scope Contract (Reviewers + Aggregator)
+
+**The diff defines the scope.** A finding is in scope only if it concerns code the diff adds or changes, or a defect the diff introduces into the code it touches. Everything else is out of scope regardless of severity label, and regardless of how many reviewers raise it:
+
+- Pre-existing problems in untouched code, including untouched code the diff merely sits next to.
+- Refactors, restructuring, renames, or new abstractions beyond what the change itself requires.
+- Requests to broaden the change: extra features, extra configuration knobs, extra defensive layers, or handling for scenarios the task does not cover.
+- Test demands beyond the changed behavior — exhaustive matrices, tests for untouched paths, or coverage targets.
+- Style and taste preferences that no repository standard actually states.
+
+A finding being *technically correct* does not make it in scope. If acting on it would make the change do more than it set out to do, discard it. Surface a genuinely serious pre-existing problem to the user as a separate note; do not fix it inside this change and do not let it block the loop.
 
 ## Execution Mode: Dual Review / Single-Review Fallback / Sub-Reviewer Bypass
 
@@ -36,6 +48,15 @@ Before starting, determine which of the three scenarios applies to the agent cur
 - When a reviewer call yields a live task or cell, keep waiting on that same task/cell in intervals no longer than 60 seconds until it completes or 30 minutes have elapsed since dispatch. Several minutes without output is normal and is not a reason to interrupt, terminate, retry, or launch a duplicate reviewer.
 - End the wait early only when the reviewer completes, the reviewer process explicitly exits with an error, the user asks to stop, or the actual 30-minute deadline expires. Never kill a live reviewer merely because it appears slow.
 
+## Prompt Length Budget (Hard Gate)
+
+The prompt handed to each reviewer must stay **≤50 lines**, and must **never exceed 80 lines** — counting the prefix line, the shared body, and every interpolated value. Long prompts bury the instructions that matter and measurably degrade review quality.
+
+- **Never inline bulk content.** Material under review (diffs, logs, prior findings, user-supplied context) goes into a file the reviewer reads itself; the prompt carries only the path plus a one-line instruction. This is why Step 1 has reviewers run `<DIFF_CMD>` themselves rather than embedding the diff.
+- If `<ARGS>` or `<DISMISSED_LIST>` exceeds ~5 lines, write it to `./tmp/review-args-<ts>.txt` / `./tmp/review-dismissed-<ts>.txt` with a built-in file tool and reference the path instead of inlining it.
+- **Count the lines of the assembled prompt file before dispatching.** Over 80 lines: move content into files or cut it. Never dispatch an over-budget prompt.
+- When trimming, cut prose and examples first. Keep the hard boundaries intact: scope contract, static-review restriction, and output format.
+
 ## Per-Round Steps
 
 ### 1. Decide Review Scope
@@ -61,6 +82,8 @@ Do not ask me to paste it; run the command and review its output. The repo's cod
 
 Focus on issues that can realistically occur under this project's actual usage patterns and threat model. Do NOT raise must-fix / should-fix items for contrived edge cases that require callers to violate documented invariants, exceed schema-enforced limits, or invoke code paths that never co-execute in practice. If you're unsure whether a scenario is realistic, classify as nit and state the assumed trigger condition so the main agent can judge.
 
+SCOPE IS THE DIFF. Only raise findings about code this diff adds or changes, or defects it introduces into the code it touches. Do NOT raise pre-existing problems in untouched code, refactors or new abstractions beyond what the change requires, requests to broaden the change (extra features, config knobs, defensive layers), exhaustive test matrices or tests for untouched paths, or style preferences no stated standard requires. A finding being technically correct does not make it in scope — if acting on it would make this change do more than it set out to do, omit it.
+
 You are reviewing; do NOT propose code edits — list findings only, each with file:line and a one-sentence rationale. Classify each as must-fix / should-fix / nit.
 
 STATIC SOURCE REVIEW ONLY. You may inspect source, repository instructions, git metadata, and diffs with read-only commands. Do NOT build, compile, reconfigure, install, package, test, run binaries or scripts, format, lint, or run analyzers. Do not modify files or generated outputs. The main agent performs verification separately.
@@ -70,7 +93,9 @@ Focus instruction from user (may be empty): <ARGS>
 Previously dismissed items (do not re-raise unless you have new evidence that materially changes the judgment): <DISMISSED_LIST>
 ```
 
-`<DISMISSED_LIST>` = the list of items downgraded / dropped in previous rounds together with the reason (from Step 4's aggregated report). Empty on round 1; from round 2 onward, the main agent MUST populate it verbatim from the prior round's report so reviewers know what has already been considered and rejected.
+`<DISMISSED_LIST>` = the list of items downgraded / dropped in previous rounds together with the reason (from Step 4's aggregated report). Empty on round 1; from round 2 onward, the main agent MUST populate it verbatim from the prior round's report so reviewers know what has already been considered and rejected. Keep it to one terse line per item; once it passes ~5 lines, put it in a file and inline the path instead, per the Prompt Length Budget.
+
+This body is ~20 lines by design, leaving the prefix line and dismissed list comfortable headroom under the 50-line target. Keep it that way — resist appending new guidance round over round; if a new instruction is needed, replace an existing line rather than adding one.
 
 ### 3. Dispatch Reviewers
 
@@ -83,6 +108,7 @@ Both reviewers use the same body, each with its own prefix line:
 
 Transport:
 - Write prompts to `./tmp/review-codex-prompt-<ts>.txt` and `./tmp/review-agy-prompt-<ts>.txt` respectively (fallback mode only needs the agy prompt).
+- **Verify the line count of each assembled prompt file before dispatch** (`wc -l`). ≤50 is the target, >80 must not be dispatched.
 - **Prompt files MUST be created using the agent's built-in Write / Edit tools** (Claude Code: `Write`; Codex CLI: its `apply_patch` / file-write tool). Do NOT generate them via shell (`echo`, `cat <<EOF`, `printf`, `tee`, `>` redirection, PowerShell `Set-Content`, etc.) — on Windows Git Bash, shell heredocs and quoting mangle backticks, `$`, backslashes, and CRLF, corrupting the prompt. The built-in file tools write the exact bytes.
 - **Dual-review mode**: issue two Bash background calls side by side in one message (`run_in_background: true`, `timeout: 1800000`) to ensure parallelism. **Always wrap the reviewer command in `bash -lc "..."`** so it runs under a login shell (PATH / helper functions like `_cmake_ps` etc. are available). Use double quotes for the outer `bash -lc` argument and escape the inner double quotes for `$(bat ...)` — single quotes break argument passing on Windows Git Bash:
   ```bash
@@ -101,13 +127,16 @@ Transport:
 
 ### 4. Aggregate Findings
 
+- **Apply the Hard Scope Contract first**: discard every out-of-scope finding before deduplication or classification, regardless of reviewer severity. Do not keep it as a nit and do not fix it "since it's cheap". In the aggregated report, state only how many findings were discarded as out of diff scope, plus any serious pre-existing problem surfaced as a separate note.
 - **Deduplicate**: if both reviewers identify the same root cause at the same `file:line`, merge it into one item and note that both found it.
 - **Reclassify** into **must-fix / should-fix / nit**: an item is **must-fix** only if at least one reviewer marks it must-fix **and** the main agent independently judges that it would cause a real problem; an item is **should-fix** if at least one reviewer marks it should-fix (or must-fix reclassified down) **and** the main agent judges it worth fixing. Reviewers can be wrong; do not rubber-stamp them.
 - **Soft circuit breaker — filter unrealistic items before fixing** (the main agent MUST apply, in order):
   1. **Realistic-likelihood filter**: downgrade to nit (or drop entirely) any item whose triggering condition is nearly impossible in real production use — e.g. a `nil` deref that requires a caller to violate a documented invariant, an "unbounded input" concern on a field the schema already caps, a race that requires two goroutines that never actually run together. Ask: "Under what real workload does this fire?" If the answer is contrived, do not fix it.
   2. **Divergence guard**: reviewers are told about previously dismissed items via `<DISMISSED_LIST>` in Step 2, so this filter is a backstop. If a new round's must-fix / should-fix items are the same *category* as items already dismissed in earlier rounds (same reviewer re-raising a pattern under a new file:line, without adding new evidence), dismiss them by reference and do not re-litigate.
   3. **Cost / benefit sanity check**: downgrade should-fix items whose fix is materially larger than the risk they mitigate (e.g. adding a config knob and 50 lines of plumbing to guard against a 1-in-10⁶ edge case).
-  4. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
+  4. **Consensus is not evidence**: both reviewers raising the same item does not make it valid or in scope. Apply the Hard Scope Contract and gates 1–3 to agreed items exactly as to single-reviewer items, and do not keep looping to satisfy reviewers on points you have dismissed.
+  5. **No partial adoption**: accepting a discarded out-of-scope finding in reduced form is still scope divergence. Only the user can pull one back into scope.
+  6. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
 - Before fixing, report the aggregated list — including downgrades and drops with reasons — to the user in Chinese.
 
 ### 5. Fix (When Must-Fix Or Should-Fix Items > 0)
@@ -122,8 +151,9 @@ Transport:
 **Stop** and summarize when any of the following is true:
 - Must-fix count AND should-fix count after aggregation in the current round are both 0.
 - The main agent judges all remaining must-fix and should-fix items invalid and gives reasons (do not loop forever on disagreement).
+- **Diff-growth / non-convergence guard**: the diff is > 1.5× its round-1 size due to review fixes rather than the original task, OR round N's must-fix count is not strictly less than round N-1's. Both indicate the loop is expanding the change instead of correcting it. Pause, report to the user, and let them pick a recovery path before continuing.
 
-There is **no hard round cap** — keep looping as long as new must-fix or should-fix items keep appearing.
+There is **no hard round cap** — keep looping as long as new in-scope must-fix or should-fix items keep appearing, **but** the non-convergence guard terminates a runaway loop. Rounds that produce only discarded out-of-scope findings count as convergence, not as new issues.
 
 ### Final Report (Chinese)
 

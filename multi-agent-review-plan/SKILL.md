@@ -2,7 +2,7 @@
 name: multi-agent-review-plan
 description: Before implementation, send the current task's high-level plan to Codex + Antigravity in parallel for review, aggregate feedback, revise the plan, and review again until there are no new issues. Strictly limit both plan authoring and review to technology selection, high-level architecture, business direction and flow, and basic business logic; exclude implementation details and code expression. Use when the user says "review my plan", "review the plan before coding", "run a dual review on the plan first", or "check whether this approach is okay". Reviewers only review; they do not edit files.
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # multi-agent-review-plan - Dual-Reviewer Closed-Loop Review For High-Level Plans
@@ -24,6 +24,8 @@ Exclude all implementation detail and code expression, including affected files 
 
 If a statement requires code-shaped detail to explain or resolve, it is out of scope. The author must remove it; reviewers must not raise it, even as a nit; the aggregator must discard it rather than write it into the plan.
 
+**Breadth is a separate axis from the four categories above.** Within those categories, the plan covers only what the stated task actually requires. Content that does not trace back to the task's stated goal or acceptance criteria is out of scope **even when it is perfectly high-level** — this includes hypothetical edge cases, speculative failure modes, adjacent features, and capabilities designed for anticipated future needs. Belonging to one of the four permitted categories is necessary, not sufficient. The default answer to "should the plan also cover X?" is **no** unless X is required for the stated task to succeed.
+
 ## Execution Mode: Dual Review / Single-Review Fallback / Sub-Reviewer Bypass
 
 Before starting, determine which of the three scenarios applies to the agent currently executing this skill:
@@ -38,6 +40,15 @@ Before starting, determine which of the three scenarios applies to the agent cur
   - Incoming prompt contains the sub-reviewer prefix from Step 3, OR the prompt is a direct review request forwarded by a parent agent → **sub-reviewer bypass**.
   - Executor is Codex CLI and the user directly asked Codex to "run the plan review loop" / "review my plan with dual reviewers" → **single-review fallback**.
   - Otherwise → **default dual-review**.
+
+## Prompt Length Budget (Hard Gate)
+
+The prompt handed to each reviewer must stay **≤50 lines**, and must **never exceed 80 lines** — counting the prefix line, the shared body, and every interpolated value. Long prompts bury the instructions that matter and measurably degrade review quality.
+
+- **Never inline bulk content.** The plan under review and any prior findings go into files the reviewer reads itself; the prompt carries only the path plus a one-line instruction. The plan is not compressed — it is simply moved out of the prompt.
+- If `<DISMISSED_LIST>` exceeds ~5 lines, write it to `./tmp/review-plan-dismissed-<ts>.txt` with a built-in file tool and reference the path instead of inlining it.
+- **Count the lines of the assembled prompt file before dispatching.** Over 80 lines: move content into files or cut it. Never dispatch an over-budget prompt.
+- When trimming, cut prose and examples first. Keep the hard boundaries intact: Hard Scope Contract, review-only restriction, and output format.
 
 ## Step 1 - Confirm There Is A Plan To Review
 
@@ -61,17 +72,21 @@ Review the following high-level plan for correctness, coverage, and direction. R
 
 Within this scope, focus on issues that can realistically bite this project under its actual usage patterns and constraints. Do NOT raise must-fix / should-fix items for contrived high-level scenarios, such as global-scale architecture for a small internal tool, multi-tenant design for a permanently single-tenant product, or a new platform dependency for a one-shot workflow. If unsure whether an in-scope scenario is realistic, classify it as nit and state the assumed trigger condition.
 
+**Do NOT push for completeness.** Judge the plan against the task it states, not against an ideal plan. Do not ask for more edge cases, more failure modes, more sections, adjacent features, or design for anticipated future needs — a shorter plan that fully answers the stated task is correct, and length is not evidence of quality. Raise a gap only when the plan as written would lead to a wrong outcome for the stated task. If your suggestion would make the plan longer, first ask whether the stated task actually requires it; if not, drop it.
+
 **Hard boundary:** do not discuss or request implementation details or code expression. Do not comment on files / repository modules, code organization, symbols, signatures, snippets, pseudocode, algorithm mechanics, schemas / fields / DDL, APIs / payloads, cache keys, queries, configuration, exact versions, flags, paths, commands, tests / tooling, or low-level operational mechanics. If such content remains in the plan, ignore it. Do not mention it even as a nit. If a finding can only be explained or fixed with those details, omit the finding entirely; it belongs in implementation or code review.
 
 You are reviewing; do NOT propose implementation steps, code edits, or file changes, and do not modify any files. List only in-scope findings, each with a one-sentence high-level rationale. Classify each as must-fix / should-fix / nit. Return "no in-scope findings" when appropriate.
 
-Plan under review:
-<PLAN_TEXT>
+The plan under review is in this file — read it yourself (read-only), do not ask me to paste it:
+  <PLAN_FILE>
 
 Previously dismissed items (do not re-raise unless you have new evidence that materially changes the judgment): <DISMISSED_LIST>
 ```
 
-`<PLAN_TEXT>` = the original text of the plan from Step 1; do not compress it.
+`<PLAN_FILE>` = path to the plan, written verbatim to `./tmp/review-plan-<ts>.md` with a built-in file tool before dispatch. Write the plan in full; do not compress it. Keeping it out of the prompt is exactly what preserves the line budget, and it costs nothing because reviewers already have read-only file access.
+
+This body is ~20 lines by design, leaving the prefix line and dismissed list comfortable headroom under the 50-line target. Keep it that way — resist appending new guidance round over round; if a new instruction is needed, replace an existing line rather than adding one.
 
 `<DISMISSED_LIST>` = the list of items downgraded / dropped in previous rounds together with the reason (from Step 4's aggregated report). Empty on round 1; from round 2 onward, the main agent MUST populate it verbatim from the prior round's report so reviewers know what has already been considered and rejected.
 
@@ -83,7 +98,9 @@ Previously dismissed items (do not re-raise unless you have new evidence that ma
 | Antigravity | `Do NOT run any git write commands (commit, push, reset, etc.). Git repository is read-only for you. Do NOT modify any files. Read-only operations only — provide findings as text/diff in your response.` | High-level architecture, design consistency, alternative angles |
 
 Transport:
+- Write the plan to `./tmp/review-plan-<ts>.md` first — both reviewers read the same file, so write it once per round.
 - Write prompts to `./tmp/review-plan-codex-prompt-<ts>.txt` and `./tmp/review-plan-agy-prompt-<ts>.txt` respectively (fallback mode only needs the agy prompt).
+- **Verify the line count of each assembled prompt file before dispatch** (`wc -l`). ≤50 is the target, >80 must not be dispatched.
 - **Prompt files MUST be created using the agent's built-in Write / Edit tools** (Claude Code: `Write`; Codex CLI: its `apply_patch` / file-write tool). Do NOT generate them via shell (`echo`, `cat <<EOF`, `printf`, `tee`, `>` redirection, PowerShell `Set-Content`, etc.) — on Windows Git Bash, shell heredocs and quoting mangle backticks, `$`, backslashes, and CRLF, corrupting the prompt. The built-in file tools write the exact bytes.
 - **Dual-review mode**: issue two Bash background calls side by side in one message (`run_in_background: true`, `timeout: 1800000`) to ensure parallelism. **Always wrap the reviewer command in `bash -lc "..."`** so it runs under a login shell (PATH / helper functions like `_cmake_ps` etc. are available). Use double quotes for the outer `bash -lc` argument and escape the inner double quotes for `$(bat ...)` — single quotes break argument passing on Windows Git Bash:
   ```bash
@@ -109,9 +126,11 @@ Transport:
 - **Apply these additional gates before updating the plan** (the main agent MUST apply them in order):
   1. **Realistic-likelihood filter**: downgrade to nit (or drop entirely) any in-scope item whose triggering condition is nearly impossible under this project's real usage. Ask: "Under what realistic scenario does this affect the selected technology, high-level architecture, business flow, or basic business rule?" If the answer is contrived, do not incorporate it.
   2. **Divergence guard**: if a new round repeats an item already dismissed without materially new high-level evidence, dismiss it by reference and do not re-litigate.
-  3. **Goal scope-creep guard**: downgrade in-scope should-fix items that materially expand the stated business goal by adding features, architectural capabilities, or adjacent work.
+  3. **Breadth / traceability guard**: **drop** (do not merely downgrade to nit) any finding whose fix would add content that does not trace back to the task's stated goal or acceptance criteria — added features, architectural capabilities, adjacent work, extra hypothetical edge cases, or sections demanded for completeness. Being high-level does not make a finding in scope.
   4. **Plan-bloat / non-convergence guard**: if the current plan length is > 1.5× the round-1 plan length, OR round N's must-fix count is not strictly less than round N-1's, stop looping and report to the user. Likely causes are scope drift or a Story-scope task that should be split. Ask the user which recovery path to take before continuing.
-  5. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
+  5. **Consensus is not evidence**: both reviewers raising the same item does not make it valid or in scope. Apply gates 1–4 to agreed items exactly as to single-reviewer items, and do not keep looping to satisfy reviewers on points you have dismissed.
+  6. **Subtract-first, and no partial adoption**: when an in-scope finding can be resolved by removing, merging, or tightening existing plan content, do that instead of adding a new section. Never accept a discarded out-of-scope finding in reduced form as a compromise — only the user can pull one back into scope.
+  7. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
 - Report the aggregated list — including downgrades and drops with reasons — to the user in **Chinese**.
 - **Modify the plan for in-scope must-fix and should-fix items only**; leave in-scope nit items for the user to decide. Never satisfy feedback by adding implementation detail.
 - After updating the plan, increment the round count and return to Step 2 for another review.
