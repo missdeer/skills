@@ -111,17 +111,17 @@ Transport:
 - Write prompts to `./tmp/review-codex-prompt-<ts>.txt` and `./tmp/review-agy-prompt-<ts>.txt` respectively (fallback mode only needs the agy prompt).
 - **Verify the line count of each assembled prompt file before dispatch** (`wc -l`). ≤50 is the target, >80 must not be dispatched.
 - **Prompt files MUST be created using the agent's built-in Write / Edit tools** (Claude Code: `Write`; Codex CLI: its `apply_patch` / file-write tool). Do NOT generate them via shell (`echo`, `cat <<EOF`, `printf`, `tee`, `>` redirection, PowerShell `Set-Content`, etc.) — on Windows Git Bash, shell heredocs and quoting mangle backticks, `$`, backslashes, and CRLF, corrupting the prompt. The built-in file tools write the exact bytes.
-- **Dual-review mode**: issue two Bash background calls side by side in one message (`run_in_background: true`, `timeout: 1800000`) to ensure parallelism. **Always wrap the reviewer command in `bash -lc "..."`** so it runs under a login shell (PATH / helper functions like `_cmake_ps` etc. are available). Use double quotes for the outer `bash -lc` argument and escape the inner double quotes for `$(bat ...)` — single quotes break argument passing on Windows Git Bash:
+- **Dual-review mode**: issue two background calls side by side in one message (`run_in_background: true`, `timeout: 1800000`) to ensure parallelism. Invoke `codex` and `agy-wrapper` directly in the current shell; do **not** wrap either command in `bash -lc`. Pass each prompt file's exact contents as one argument:
   ```bash
-  bash -lc "codex exec -s read-only --skip-git-repo-check \"\$(bat --plain --paging=never ./tmp/review-codex-prompt-<ts>.txt)\""
+  codex exec -s read-only --skip-git-repo-check "$(bat --plain --paging=never ./tmp/review-codex-prompt-<ts>.txt)"
   ```
   ```bash
-  bash -lc "agy-wrapper --dangerously-skip-permissions --timeout 30m --print-timeout 30m -p \"\$(bat --plain --paging=never ./tmp/review-agy-prompt-<ts>.txt)\""
+  agy-wrapper --dangerously-skip-permissions --timeout 30m --print-timeout 30m -p "$(bat --plain --paging=never ./tmp/review-agy-prompt-<ts>.txt)"
   ```
   Continue to Step 4 only after both return.
-- **Single-review fallback mode (executor is Codex CLI)**: run only one path (still wrapped in `bash -lc "..."`):
+- **Single-review fallback mode (executor is Codex CLI)**: run only the Antigravity path, invoking `agy-wrapper` directly:
   ```bash
-  bash -lc "agy-wrapper --dangerously-skip-permissions --timeout 30m --print-timeout 30m -p \"\$(bat --plain --paging=never ./tmp/review-agy-prompt-<ts>.txt)\""
+  agy-wrapper --dangerously-skip-permissions --timeout 30m --print-timeout 30m -p "$(bat --plain --paging=never ./tmp/review-agy-prompt-<ts>.txt)"
   ```
 - Poll results with `TaskOutput` (or the environment's equivalent wait primitive) at intervals no longer than 60 seconds. Continue waiting on the same live reviewer for up to 30 minutes; do not terminate or duplicate it because it is quiet or slow. Delete temporary files only after the reviewer has completed or the true 30-minute deadline has expired.
 - If one CLI (for example `agy-wrapper`) is not on PATH, **tell the user** and continue with the remaining reviewer. Do not pretend the missing reviewer also passed. In fallback mode, if `agy-wrapper` is missing, tell the user this round cannot be reviewed; do not fall back to Codex self-review.
