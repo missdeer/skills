@@ -2,12 +2,19 @@
 name: jira-issue-resolver
 description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root, producing and tersely reviewing a brief change plan, attaching the plan, coding and testing, reviewing code, committing, and writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
 metadata:
-  version: "1.5.0"
+  version: "1.5.1"
 ---
 
 # jira-issue-resolver
 
 Guide the agent through a fixed process to resolve one JIRA issue: from parsing the issue key to writing the final commit id back to JIRA. **Every phase has a hard gate; do not enter the next phase unless the current one passes.**
+
+## Language Contract (Hard Gate)
+
+- Write all agent-authored natural-language content persisted to JIRA in Chinese. This includes issue summaries and descriptions, comments, link comments, free-text custom fields, and the contents of text documents uploaded as attachments, including change plans.
+- Keep machine-controlled values unchanged: issue keys, usernames, status and transition names, issue-type names, link types, labels, branch names, commit hashes, filenames, paths, code identifiers, JQL, JSON keys, and API field names. Do not translate quoted source material unless it is being rewritten as new JIRA prose.
+- Use English for every other agent-authored natural-language artifact and interaction, including reasoning, prompts, reviewer instructions and findings, progress updates, questions, user-facing reports, local notes not uploaded to JIRA, code comments, documentation, and Git commit messages.
+- Before every JIRA write, inspect the complete payload and translate all agent-authored prose to Chinese. Before emitting any non-JIRA content, ensure it is in English. If a payload mixes prose with machine values, translate only the prose.
 
 ## Trigger Scenarios
 
@@ -87,6 +94,8 @@ If the conditions are not met, skip this section and continue to step 3.
 
 Write the plan directly after enough read-only investigation to understand the ticket. Keep private analysis as detailed as needed; keep the emitted plan extremely short.
 
+Write the plan content in Chinese because it will be uploaded to JIRA. Keep reviewer prompts, reviewer findings, aggregation, and user-facing plan status in English.
+
 **Required format**:
 - **3–7 flat bullets and normally no more than 15 non-empty lines**, including headings.
 - State only: the outcome/scope, the concrete change points, and how acceptance will be verified.
@@ -128,7 +137,7 @@ If the conditions are not met, skip this step and continue directly to step 5.
 
 1. **Skip the step 3 plan for now** — write a brief decomposition plan using the same format and budget, plus one bullet per proposed subtask. Hard ceiling: 20 non-empty lines. Include only the outcome, functional slices, dependency order, and acceptance point for each slice.
 2. Run `/multi-agent-review-plan` under the step 4 concise review contract.
-3. Once the decomposition plan is approved, use the `/jira` skill to create that number of subtasks under the `TARGET` project (issuetype is usually "Task" / "Sub-task", depending on project configuration; ask the user if unsure), and make each new task a subtask of `TARGET` or link it back to `TARGET` with `is blocked by`. For each subtask, write a summary describing the delivered functional slice and copy its relevant bullet into the description.
+3. Once the decomposition plan is approved, use the `/jira` skill to create that number of subtasks under the `TARGET` project (issuetype is usually "Task" / "Sub-task", depending on project configuration; ask the user if unsure), and make each new task a subtask of `TARGET` or link it back to `TARGET` with `is blocked by`. For each subtask, write the summary and description in Chinese: describe the delivered functional slice in the summary and copy its relevant Chinese bullet into the description.
 4. Record the generated subtask key list as `SUBTASKS = [key1, key2, ...]`, ordered by dependency / implementation order.
 5. Add a comment to `TARGET` (the story / task): list all `SUBTASKS` and explain that they should be executed in order, one per run; this run will implement `SUBTASKS[0]` first, and the remaining subtasks should be handled by triggering this skill again later.
 6. Attach the decomposition plan to `TARGET` once for future linking.
@@ -190,6 +199,7 @@ Use the `/jira` skill on the current round's `TARGET` (in split scenarios this i
    - Test status (tests added / modified and run results)
    - Git commit id (full hash + short hash)
    - Branch name (`git rev-parse --abbrev-ref HEAD`)
+   - Write all explanatory prose in this comment in Chinese; preserve file names, module names, hashes, and the branch name verbatim.
 2. **Transition status**: based on the issue's current status and available transitions, move it to the appropriate next status (usually "In Review" or "Resolved", depending on the team workflow). First list available transitions with `/jira`, then pick the transition that best matches "code complete, awaiting acceptance"; ask the user if unsure.
 
 Do **not** write back status to the story itself during this run.

@@ -3,7 +3,7 @@ name: jira
 description: "Read/write JIRA issues on https://jira.ismisv.com via REST API v2 only. Use ONLY for direct issue CRUD: get an issue by key (SHELFECOMM-1, FOO-123), JQL search, read/add comments, list/apply transitions, create a ticket, (re)assign, link/unlink issues, or list/upload/download/delete attachments. Do NOT use for end-to-end issue resolution workflows (planning, coding, reviewing, committing) — that is the `jira-issue-resolver` skill's job; do NOT use for non-JIRA ticketing (GitHub Issues, Lark Task); do NOT scrape HTML pages or invent endpoints. Authenticates with Basic Auth from `jira-auth.json` (gitignored)."
 license: MIT
 metadata:
-  version: "2.2.0"
+  version: "2.2.1"
 ---
 
 # JIRA (jira.ismisv.com) REST API
@@ -23,6 +23,13 @@ File format:
 ```
 
 Prefer `$HOME` so credentials live outside any repo. Never commit it, never echo the password back to the user. Override the base URL with the `JIRA_URL` environment variable.
+
+## Language Contract (Hard Gate)
+
+- Write all agent-authored natural-language content persisted to JIRA in Chinese. This includes issue summaries and descriptions, comments, link comments, free-text custom fields, and text documents created for upload as attachments.
+- Keep machine-controlled values unchanged: issue keys, usernames, status and transition names, issue-type names, link types, labels, filenames, paths, code identifiers, JQL, JSON keys, and API field names. Do not translate quoted source material unless rewriting it as new JIRA prose.
+- Use English for every other agent-authored natural-language artifact and interaction, including reasoning, commands, prompts, progress updates, questions, explanations, and final responses to the user.
+- Before every POST, PUT, or attachment upload, inspect the complete payload and translate all agent-authored prose to Chinese. For mixed structured payloads, translate only human-readable prose values. If a JIRA write has no natural-language payload, such as a transition, assignment, unlink, or attachment deletion, preserve the required identifiers exactly.
 
 ## When to use
 
@@ -50,12 +57,12 @@ jira get SHELFECOMM-1 --fields=summary,status,assignee
 jira jql 'assignee = currentUser() AND resolution = Unresolved'
 jira jql 'project = SHELFECOMM ORDER BY created DESC' --limit=20
 jira comments SHELFECOMM-1
-jira comment SHELFECOMM-1 'patched in commit abc1234'
+jira comment SHELFECOMM-1 '已在提交 abc1234 中修复'
 jira transitions SHELFECOMM-1                # list available next states
 jira transition SHELFECOMM-1 31              # move to transition id 31
 jira projects                                # list visible projects
 jira meta SHELFECOMM                         # list issue types in a project
-jira create SHELFECOMM Task 'Fix login redirect bug' \
+jira create SHELFECOMM Task '修复登录重定向问题' \
     --assignee=missdeer \
     --text-file=tmp/issue-desc.txt           # see "Creating tickets" below
 jira assign SHELFECOMM-6 missdeer            # (re)assign; use "-1" for Automatic, "" to unassign
@@ -110,6 +117,7 @@ Run `jira --help` for the full command and flag reference.
 - **Surfacing only what's asked.** For `get`, default returns the full issue. When the user only needs a summary or a few fields, pass `--fields=...` so the output stays small.
 - **JQL needs quoting.** Wrap the whole JQL expression in single quotes when invoking the script; the wrapper URL-encodes it.
 - **Comments are plain text + JIRA wiki markup.** No Markdown rendering. `{{code}}`, `*bold*`, `[link|url]` etc. work.
+- **JIRA prose is Chinese.** Write summaries, descriptions, comments, link notes, and other human-readable values in Chinese. Preserve machine values and JIRA vocabulary exactly as returned by the API.
 - **Transitions are project-specific.** Always call `transitions` first to discover the id — never hard-code one across projects.
 - **Failures are loud.** The tool exits non-zero and prints the response body to stderr on any non-2xx — do not silently retry. Exit 1 = HTTP error; exit 2 = bad usage / missing auth file.
 - Set environment variable `MSYS_NO_PATHCONV=1` when launch `jira` and only when launch `jira` on Windows.
@@ -120,16 +128,16 @@ Run `jira --help` for the full command and flag reference.
 Recipe:
 
 1. `meta <PROJECT>` to see the project's issue types (id + name). On `SHELFECOMM` they are Task / Bug / Story / Sub-task / Epic.
-2. Put the **description** in a UTF-8 file and pass `--text-file=<path>` — this is the one and only safe path for CJK content (see "UTF-8 / Windows gotcha" below). For pure ASCII bodies, `--description='…'` inline is fine. `--description-file=<path>` still works as a deprecated alias.
+2. Write the **description in Chinese**, put it in a UTF-8 file, and pass `--text-file=<path>` — this is the one and only safe path for CJK content (see "UTF-8 / Windows gotcha" below). `--description-file=<path>` still works as a deprecated alias.
 3. Call `create`. The response is the standard `{id, key, self}` triple — surface the `key` (e.g. `SHELFECOMM-6`) back to the user along with the browse URL `https://jira.ismisv.com/browse/<KEY>`.
 
 Description bodies are interpreted as **JIRA wiki markup**, not Markdown. Common patterns:
 
-- Headings: `h2. Foo` / `h3. Bar`
-- Bullet list: `* item`
-- Numbered list: `# step`
+- Headings: `h2. 概述` / `h3. 验收条件`
+- Bullet list: `* 条目`
+- Numbered list: `# 步骤`
 - Code: `{{inline}}` / `{code}block{code}`
-- Links: `[label|https://…]`
+- Links: `[链接文字|https://…]`
 
 ## UTF-8 / CJK
 
@@ -139,7 +147,7 @@ and `assign` — no shell-codepage workaround needed.
 
 For `raw POST/PUT` with CJK payloads, both forms work:
 
-- `jira raw POST /issue '{"fields":{"summary":"Fix bug",…}}'` — literal string.
+- `jira raw POST /issue '{"fields":{"summary":"修复缺陷",…}}'` — literal string.
 - `jira --text-file=tmp/payload.json raw POST /issue` — file bytes verbatim (preferred for non-trivial payloads). The legacy `raw POST /issue @tmp/payload.json` form still works but is deprecated.
 
 ## Attachments
