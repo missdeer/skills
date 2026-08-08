@@ -33,9 +33,9 @@ In this repository, Antigravity is the **steering wheel**: it reviews direction,
 
 3. **Transport method - run the wrapper directly**:
    - Write the prompt to `./tmp/agy-prompt-<ts>.txt` (`<ts>` should use `date +%s` or a similar identifier to avoid concurrent overwrites).
-   - Run in Bash in the background:
+   - Run in the background:
      ```bash
-     agy-wrapper --dangerously-skip-permissions --timeout 30m -p "$(bat --plain --paging=never ./tmp/agy-prompt-<ts>.txt)"
+     agy-wrapper --dangerously-skip-permissions --timeout 30m --print-timeout 30m -p "$(bat --plain --paging=never ./tmp/agy-prompt-<ts>.txt)"
      ```
      `run_in_background: true`, `timeout: 1800000` (30 minutes).
    - Poll the result with `TaskOutput`.
