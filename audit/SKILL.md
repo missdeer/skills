@@ -1,11 +1,9 @@
 ---
 name: audit
-description: Use Codex CLI to perform a single structured code review of the current branch's pending diff or branch-vs-master diff. Output five issue categories (correctness / edge cases / security / compatibility / coding standards) and classify them as must-fix / should-fix / nit. Use when the user says "review the current changes", "audit this", "go over the pending changes for issues", or "scan the diff". This is a single review, not a fix loop. Optional focus instructions (such as "only look at SQL", "focus on error handling", or "ignore test files") are passed through via arguments.
-metadata:
-  version: "1.0.0"
+description: Perform a single structured code review of the current branch's pending diff or branch-vs-master diff. Review in the current context when the primary agent is Codex; otherwise invoke Codex CLI. Output five issue categories (correctness / edge cases / security / compatibility / coding standards) and classify them as must-fix / should-fix / nit. Use when the user says "review the current changes", "audit this", "go over the pending changes for issues", or "scan the diff". This is a single review, not a fix loop. Optional focus instructions (such as "only look at SQL", "focus on error handling", or "ignore test files") are passed through verbatim.
 ---
 
-# audit - Have Codex Perform A Single Structured Review Of A Pending Diff
+# audit - Perform A Single Structured Review Of A Pending Diff
 
 Single review, single reviewer, no code changes, no loop. The goal is to quickly produce a list of "what issues exist and how severe they are" for the user to judge.
 
@@ -39,16 +37,16 @@ Do not ask me to paste it; run the command and review its output. The repo's cod
 Focus instruction from user (may be empty): <ARGS>
 ```
 
-## Step 3 - Run Codex
+## Step 3 - Perform The Review
 
-- Write the prompt to `./tmp/audit-prompt-<ts>.txt` (`<ts>` = `date +%s` or a similar identifier to avoid concurrent overwrites).
-- Run in Bash in the background:
-  ```bash
-  codex exec -s read-only --skip-git-repo-check "$(bat --plain --paging=never ./tmp/audit-prompt-<ts>.txt)"
+- If the current primary agent is Codex, do not start `codex exec`, spawn another reviewer, or create a prompt file. Run `<DIFF_CMD>` and perform the review directly in the current agent context using the checks from Step 2.
+- Otherwise, write the prompt to `./tmp/audit-prompt-<ts>.txt` (`<ts>` is a unique timestamp or similar identifier), then invoke Codex CLI directly from the current shell without `bash -lc` or another shell wrapper. In PowerShell:
+  ```powershell
+  Get-Content -Raw ./tmp/audit-prompt-<ts>.txt | codex exec -s read-only --skip-git-repo-check -
   ```
-  `run_in_background: true`, `timeout: 1800000` (30 minutes).
-- Codex runs at the repository root, so `<DIFF_CMD>` will resolve normally; `git diff` is allowed in the `read-only` sandbox.
-- Poll the result with `TaskOutput`, and delete the temporary prompt file after it finishes.
+  Run it in the background with a 30-minute timeout when the available execution tool supports background tasks.
+- Run Codex at the repository root so `<DIFF_CMD>` resolves normally; `git diff` is allowed in the `read-only` sandbox.
+- If a subprocess was started, poll it until completion and delete the temporary prompt file afterward.
 
 ## Step 4 - Report
 
