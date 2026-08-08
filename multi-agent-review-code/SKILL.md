@@ -2,7 +2,7 @@
 name: multi-agent-review-code
 description: Use Codex + Antigravity as static-source reviewers in parallel to review a pending diff or branch-vs-master diff, aggregate and deduplicate findings, fix must-fix and should-fix items, and review again until clean. Reviewers may inspect source and git metadata only; they never build, test, install, run, format, lint, or analyze the project. The main agent must allow each live reviewer up to 30 minutes to finish. Use for heavyweight ship-readiness review before release or merge.
 metadata:
-  version: "1.2.0"
+  version: "1.2.1"
 ---
 
 # multi-agent-review-code - Dual-Reviewer Ship-Readiness Loop
@@ -57,6 +57,12 @@ The prompt handed to each reviewer must stay **≤50 lines**, and must **never e
 - **Count the lines of the assembled prompt file before dispatching.** Over 80 lines: move content into files or cut it. Never dispatch an over-budget prompt.
 - When trimming, cut prose and examples first. Keep the hard boundaries intact: scope contract, static-review restriction, and output format.
 
+## Reviewer Language Contract (Hard Gate)
+
+- Write every reviewer prompt entirely in English, including all instructions and interpolated values such as `<ARGS>` and `<DISMISSED_LIST>`. Faithfully translate user-provided review instructions or prior dismissal summaries into English before inserting them.
+- Do not translate source code, diffs, file paths, identifiers, logs, or other review artifacts; the English-only requirement applies to the reviewer prompt and response, not to repository contents.
+- Every reviewer prompt must explicitly instruct the reviewer to reason in English and output only in English. Reject or re-run a response that is not in English before aggregation.
+
 ## Per-Round Steps
 
 ### 1. Decide Review Scope
@@ -88,6 +94,8 @@ You are reviewing; do NOT propose code edits — list findings only, each with f
 
 STATIC SOURCE REVIEW ONLY. You may inspect source, repository instructions, git metadata, and diffs with read-only commands. Do NOT build, compile, reconfigure, install, package, test, run binaries or scripts, format, lint, or run analyzers. Do not modify files or generated outputs. The main agent performs verification separately.
 
+Reason in English and output only in English.
+
 Focus instruction from user (may be empty): <ARGS>
 
 Previously dismissed items (do not re-raise unless you have new evidence that materially changes the judgment): <DISMISSED_LIST>
@@ -103,8 +111,8 @@ Both reviewers use the same body, each with its own prefix line:
 
 | Reviewer | Prefix line | Perspective |
 |---|---|---|
-| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform a static source review yourself and output findings only. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Do NOT build, test, install, execute, format, lint, or run analyzers. Read source and git metadata only; then review and return.` | Deep technical review, edge cases, line-level correctness |
-| Antigravity | `Current working directory (absolute path): <WORKDIR>. Treat this as the repository root and resolve all relative paths from it. STATIC SOURCE REVIEW ONLY. Do NOT build, test, install, execute, format, lint, or run analyzers. Do NOT run any git write commands (commit, push, reset, etc.). Git repository and generated outputs are read-only for you. Inspect source and git metadata only, and provide findings as text in your response.` | High-level architecture, design consistency, alternative angles |
+| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform a static source review yourself and output findings only. Reason in English and output only in English. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Do NOT build, test, install, execute, format, lint, or run analyzers. Read source and git metadata only; then review and return.` | Deep technical review, edge cases, line-level correctness |
+| Antigravity | `Current working directory (absolute path): <WORKDIR>. Treat this as the repository root and resolve all relative paths from it. Reason in English and output only in English. STATIC SOURCE REVIEW ONLY. Do NOT build, test, install, execute, format, lint, or run analyzers. Do NOT run any git write commands (commit, push, reset, etc.). Git repository and generated outputs are read-only for you. Inspect source and git metadata only, and provide findings as text in your response.` | High-level architecture, design consistency, alternative angles |
 
 Transport:
 - Resolve the current working directory to an absolute path when assembling the Antigravity prompt and substitute it for `<WORKDIR>` in the prefix. The absolute path MUST appear in the prompt itself; do not rely on `agy-wrapper` inheriting the correct process working directory.

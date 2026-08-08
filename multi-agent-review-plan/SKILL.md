@@ -2,7 +2,7 @@
 name: multi-agent-review-plan
 description: Before implementation, send the current task's high-level plan to Codex + Antigravity in parallel for review, aggregate feedback, revise the plan, and review again until there are no new issues. Strictly limit both plan authoring and review to technology selection, high-level architecture, business direction and flow, and basic business logic; exclude implementation details and code expression. Use when the user says "review my plan", "review the plan before coding", "run a dual review on the plan first", or "check whether this approach is okay". Reviewers only review; they do not edit files.
 metadata:
-  version: "1.2.0"
+  version: "1.2.1"
 ---
 
 # multi-agent-review-plan - Dual-Reviewer Closed-Loop Review For High-Level Plans
@@ -50,6 +50,12 @@ The prompt handed to each reviewer must stay **≤50 lines**, and must **never e
 - **Count the lines of the assembled prompt file before dispatching.** Over 80 lines: move content into files or cut it. Never dispatch an over-budget prompt.
 - When trimming, cut prose and examples first. Keep the hard boundaries intact: Hard Scope Contract, review-only restriction, and output format.
 
+## Reviewer Language Contract (Hard Gate)
+
+- Write every reviewer prompt entirely in English, including all instructions and interpolated values such as `<DISMISSED_LIST>`. Faithfully translate user-provided review instructions or prior dismissal summaries into English before inserting them.
+- Do not translate the plan, source code, file paths, identifiers, or other review artifacts; the English-only requirement applies to the reviewer prompt and response, not to the artifact under review.
+- Every reviewer prompt must explicitly instruct the reviewer to reason in English and output only in English. Reject or re-run a response that is not in English before aggregation.
+
 ## Step 1 - Confirm There Is A Plan To Review
 
 - Complex or multi-step tasks: if the conversation does not yet contain a structured high-level plan, **write one first** (it can be produced in the current conversation; no need to persist it). Include only: business goal / scope / non-goals; material technology choices and rationale; conceptual architecture and interactions; business flow, states, rules, boundaries, and acceptance points; high-level assumptions, risks, and open decisions within the Hard Scope Contract.
@@ -78,6 +84,8 @@ Within this scope, focus on issues that can realistically bite this project unde
 
 You are reviewing; do NOT propose implementation steps, code edits, or file changes, and do not modify any files. List only in-scope findings, each with a one-sentence high-level rationale. Classify each as must-fix / should-fix / nit. Return "no in-scope findings" when appropriate.
 
+Reason in English and output only in English.
+
 The plan under review is in this file — read it yourself (read-only), do not ask me to paste it:
   <PLAN_FILE>
 
@@ -94,8 +102,8 @@ This body is ~20 lines by design, leaving the prefix line and dismissed list com
 
 | Reviewer | Prefix line | Perspective |
 |---|---|---|
-| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform the review yourself and output findings only. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Just review and return.` | Technology choices, architecture coherence, and business-logic edge cases at the high-level-plan scope |
-| Antigravity | `Current working directory (absolute path): <WORKDIR>. Treat this as the repository root and resolve all relative paths from it. Do NOT run any git write commands (commit, push, reset, etc.). Git repository is read-only for you. Do NOT modify any files. Read-only operations only — provide findings as text/diff in your response.` | High-level architecture, design consistency, alternative angles |
+| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform the review yourself and output findings only. Reason in English and output only in English. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Just review and return.` | Technology choices, architecture coherence, and business-logic edge cases at the high-level-plan scope |
+| Antigravity | `Current working directory (absolute path): <WORKDIR>. Treat this as the repository root and resolve all relative paths from it. Reason in English and output only in English. Do NOT run any git write commands (commit, push, reset, etc.). Git repository is read-only for you. Do NOT modify any files. Read-only operations only — provide findings as text/diff in your response.` | High-level architecture, design consistency, alternative angles |
 
 Transport:
 - Resolve the current working directory to an absolute path when assembling the Antigravity prompt and substitute it for `<WORKDIR>` in the prefix. The absolute path MUST appear in the prompt itself; do not rely on `agy-wrapper` inheriting the correct process working directory.
