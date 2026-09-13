@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Commit the current repository's local changes to git with a conventional English commit message, following this repository's conventions (no co-author line, write the message to `./tmp/commit_message.txt` and use `git commit -F`, stop and hand off to the user on GPG failure). Use when the user says "commit", "submit these changes", "help me commit these changes", or "commit this". Only create a single commit; do not push and do not perform pre-commit fixes.
+description: Create one local Git commit when committing is authorized by the user, directly or within an explicitly requested workflow. Follow repository message conventions; do not push or perform product-code fixes.
 metadata:
   version: "1.0.0"
 ---
@@ -11,7 +11,7 @@ Single-commit workflow. It is only responsible for turning staged / working-tree
 
 ## Preconditions
 
-- Execute this skill only when the user **explicitly asks for a commit**; otherwise do not commit proactively.
+- Execute this skill only when the user has authorized a commit, directly or as part of an explicitly requested workflow that includes committing. Reuse that authorization for the same scope; otherwise do not commit proactively.
 - Run all git operations at the **repository root**. If cwd is not the root, switch there before starting.
 - **Use English for the commit message**.
 - **Do not add a co-author** line (repository convention).
@@ -37,17 +37,16 @@ Understand the **exact scope** and **style template** for this commit before con
 
 ## Step 3 - Write The Message And Commit
 
-1. If `./tmp/commit_message.txt` already exists, delete it first.
-2. Use the **Write tool** (**not** a heredoc / `echo`) to write the message to `./tmp/commit_message.txt`.
-3. Run:
+1. Use the environment's built-in file-editing tool to write or replace `./tmp/commit_message.txt` directly; do not delete it first or generate it with a heredoc / `echo`.
+2. Run:
    ```bash
    git commit -F ./tmp/commit_message.txt
    ```
-4. Run `git status` to confirm the commit succeeded.
+3. Run `git status` to confirm the commit succeeded.
 
 ## Step 4 - Handle The Result
 
 - **GPG signing failure**: **stop**, tell the user why it failed, and ask them to commit manually. Do not try to bypass it with `--no-gpg-sign`.
-- **pre-commit hook failure**: the commit did not happen. After fixing the hook-reported issues, **create a new commit** (do not `--amend` the previous commit, which would incorrectly modify history).
+- **pre-commit hook failure**: report that the commit did not happen and return the findings to the calling implementation workflow. This skill does not fix product code. If the existing task authorizes those fixes, that workflow may fix and verify them, then retry this commit without asking again. For a commit-only request, report the blocker and ask before expanding into product-code fixes. Do not bypass the hook or use `--amend` on the previous commit.
 - **Success**: report the new commit hash and subject to the user in one confirmation line. Do not write a long summary (the user can inspect the diff).
 - Whether it succeeds or fails, **do not push**.

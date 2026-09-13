@@ -1,6 +1,6 @@
 ---
 name: multi-agent-review-plan
-description: Before implementation, send the current task's high-level plan to Codex + Antigravity in parallel for review, aggregate feedback, revise the plan, and review again until there are no new issues. Strictly limit both plan authoring and review to technology selection, high-level architecture, business direction and flow, and basic business logic; exclude implementation details and code expression. Use when the user says "review my plan", "review the plan before coding", "run a dual review on the plan first", or "check whether this approach is okay". Reviewers only review; they do not edit files.
+description: Review a high-level plan with external reviewers before implementation. Use when the user or an authorized workflow requests multi-agent plan review; assess technology choices, architecture, and business rules, not code details.
 metadata:
   version: "1.2.1"
 ---
@@ -50,26 +50,26 @@ The prompt handed to each reviewer must stay **≤50 lines**, and must **never e
 - **Count the lines of the assembled prompt file before dispatching.** Over 80 lines: move content into files or cut it. Never dispatch an over-budget prompt.
 - When trimming, cut prose and examples first. Keep the hard boundaries intact: Hard Scope Contract, review-only restriction, and output format.
 
-## Reviewer Language Contract (Hard Gate)
+## Reviewer Language
 
-- Write every reviewer prompt entirely in English, including all instructions and interpolated values such as `<DISMISSED_LIST>`. Faithfully translate user-provided review instructions or prior dismissal summaries into English before inserting them.
-- Do not translate the plan, source code, file paths, identifiers, or other review artifacts; the English-only requirement applies to the reviewer prompt and response, not to the artifact under review.
-- Every reviewer prompt must explicitly instruct the reviewer to reason in English and output only in English. Reject or re-run a response that is not in English before aggregation.
+- Prefer English reviewer instructions while preserving the user's meaning. Keep the plan, source code, paths, identifiers, and other artifacts unchanged.
+- Accept understandable findings in any language; translate them for aggregation when needed. Never reject or rerun a review solely because of its language.
+- User-facing updates and the final report follow the user's language unless the caller supplies a specific output contract.
 
 ## Step 1 - Confirm There Is A Plan To Review
 
 - Complex or multi-step tasks: if the conversation does not yet contain a structured high-level plan, **write one first** (it can be produced in the current conversation; no need to persist it). Include only: business goal / scope / non-goals; material technology choices and rationale; conceptual architecture and interactions; business flow, states, rules, boundaries, and acceptance points; high-level assumptions, risks, and open decisions within the Hard Scope Contract.
 - Existing sufficient plan: skip the plan-writing step and use the existing plan directly.
-- If the task itself is trivial enough (1-2 steps, implemented in one pass), this skill does not apply; implement directly.
+- For a trivial task, a local review is sufficient unless external review was explicitly requested. Continue to implementation only if the user has authorized it; a review-only request does not authorize code changes.
 
-**Pre-dispatch self-audit (main agent, MUST run before every dispatch)**: compare every plan statement with the Hard Scope Contract. Remove affected-file lists, code identifiers, schemas, APIs, configuration, commands, tests, pseudocode, and implementation sequences. Replace implementation-shaped descriptions only when they can be expressed as a permitted technology choice, conceptual component interaction, business flow, or business rule; otherwise delete them. If the incoming plan is mostly implementation-level, rewrite it before review. Dispatch only after every remaining statement is in scope.
+**Pre-dispatch scope check**: check the full plan against the Hard Scope Contract before its first review; on follow-up rounds, check revised decisions and their effects. Remove affected-file lists, code identifiers, schemas, APIs, configuration, commands, tests, pseudocode, and implementation sequences. Replace implementation-shaped descriptions only when they can be expressed as a permitted technology choice, conceptual component interaction, business flow, or business rule; otherwise delete them. If the incoming plan is mostly implementation-level, rewrite it before review. Reuse the scope assessment of unchanged decisions unless new evidence changes it.
 
 ## Step 2 - Assemble The Shared Message Body
 
 Both reviewers use the same body, with only different prefix lines:
 
 ```
-Review the following high-level plan for correctness, coverage, and direction. Review ONLY:
+Review the following high-level plan for correctness, coverage, and direction. On follow-up rounds, assess only the revised decisions, unresolved findings, and their effects on the rest of the plan, as described in the review focus. Review ONLY:
   1. Technology selection - whether each material choice is suitable and whether its stated high-level tradeoffs are sound
   2. High-level architecture - whether conceptual responsibilities, boundaries, ownership, dependencies, and interactions are coherent
   3. Business direction and flow - whether the plan addresses the real need and covers realistic main / exception flows and conceptual state transitions
@@ -84,10 +84,12 @@ Within this scope, focus on issues that can realistically bite this project unde
 
 You are reviewing; do NOT propose implementation steps, code edits, or file changes, and do not modify any files. List only in-scope findings, each with a one-sentence high-level rationale. Classify each as must-fix / should-fix / nit. Return "no in-scope findings" when appropriate.
 
-Reason in English and output only in English.
+Prefer English output.
 
 The plan under review is in this file — read it yourself (read-only), do not ask me to paste it:
   <PLAN_FILE>
+
+Review focus (full plan on round 1; revised decisions and unresolved findings thereafter): <REVIEW_FOCUS>
 
 Previously dismissed items (do not re-raise unless you have new evidence that materially changes the judgment): <DISMISSED_LIST>
 ```
@@ -102,8 +104,8 @@ This body is ~20 lines by design, leaving the prefix line and dismissed list com
 
 | Reviewer | Prefix line | Perspective |
 |---|---|---|
-| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform the review yourself and output findings only. Reason in English and output only in English. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Just review and return.` | Technology choices, architecture coherence, and business-logic edge cases at the high-level-plan scope |
-| Antigravity | `Current working directory (absolute path): <WORKDIR>. Treat this as the repository root and resolve all relative paths from it. Reason in English and output only in English. Do NOT run any git write commands (commit, push, reset, etc.). Git repository is read-only for you. Do NOT modify any files. Read-only operations only — provide findings as text/diff in your response.` | High-level architecture, design consistency, alternative angles |
+| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform the review yourself and output findings only. Prefer English output. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Just review and return.` | Technology choices, architecture coherence, and business-logic edge cases at the high-level-plan scope |
+| Antigravity | `Current working directory (absolute path): <WORKDIR>. Treat this as the repository root and resolve all relative paths from it. Prefer English output. Do NOT run any git write commands (commit, push, reset, etc.). Git repository is read-only for you. Do NOT modify any files. Read-only operations only — provide findings as text/diff in your response.` | High-level architecture, design consistency, alternative angles |
 
 Transport:
 - Resolve the current working directory to an absolute path when assembling the Antigravity prompt and substitute it for `<WORKDIR>` in the prefix. The absolute path MUST appear in the prompt itself; do not rely on `agy-wrapper` inheriting the correct process working directory.
@@ -123,9 +125,9 @@ Transport:
   ```bash
   agy-wrapper --dangerously-skip-permissions --timeout 30m --print-timeout 30m -p "$(bat --plain --paging=never ./tmp/review-plan-agy-prompt-<ts>.txt)"
   ```
-- Poll results with `TaskOutput`, and delete temporary files after completion.
+- Use the environment's background execution and result tools (`TaskOutput` or equivalent). Allow up to 30 minutes per reviewer; return immediately on completion or an explicit process error, and do not duplicate a quiet live reviewer. While waiting, do independent authorized work without changing the reviewed plan. Delete temporary files only after reviewers finish.
 - If one CLI is missing (for example `agy-wrapper` is not on PATH), tell the user and continue with the remaining reviewer. Do not pretend the missing reviewer also passed. In fallback mode, if `agy-wrapper` is missing, tell the user this round cannot be reviewed; do not fall back to Codex self-review.
-- **Do not start implementation** until feedback from all reviewers has been received.
+- **Do not start implementation** while the requested review is pending. If a reviewer fails or is unavailable, disclose incomplete coverage rather than claiming approval; respect any explicit requirement for all reviewers to pass.
 
 ## Step 4 - Aggregate Feedback And Update The Plan
 
@@ -136,26 +138,28 @@ Transport:
   1. **Realistic-likelihood filter**: downgrade to nit (or drop entirely) any in-scope item whose triggering condition is nearly impossible under this project's real usage. Ask: "Under what realistic scenario does this affect the selected technology, high-level architecture, business flow, or basic business rule?" If the answer is contrived, do not incorporate it.
   2. **Divergence guard**: if a new round repeats an item already dismissed without materially new high-level evidence, dismiss it by reference and do not re-litigate.
   3. **Breadth / traceability guard**: **drop** (do not merely downgrade to nit) any finding whose fix would add content that does not trace back to the task's stated goal or acceptance criteria — added features, architectural capabilities, adjacent work, extra hypothetical edge cases, or sections demanded for completeness. Being high-level does not make a finding in scope.
-  4. **Plan-bloat / non-convergence guard**: if the current plan length is > 1.5× the round-1 plan length, OR round N's must-fix count is not strictly less than round N-1's, stop looping and report to the user. Likely causes are scope drift or a Story-scope task that should be split. Ask the user which recovery path to take before continuing.
+  4. **Plan-growth check**: growth beyond 1.5× the round-1 length is a prompt for the main agent to check scope, not an automatic pause. Remove unsupported additions and retain decisions required by the stated acceptance criteria. Check completion before applying the stalled-review rule in Step 5.
   5. **Consensus is not evidence**: both reviewers raising the same item does not make it valid or in scope. Apply gates 1–4 to agreed items exactly as to single-reviewer items, and do not keep looping to satisfy reviewers on points you have dismissed.
   6. **Subtract-first, and no partial adoption**: when an in-scope finding can be resolved by removing, merging, or tightening existing plan content, do that instead of adding a new section. Never accept a discarded out-of-scope finding in reduced form as a compromise — only the user can pull one back into scope.
   7. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
-- Report the aggregated list — including downgrades and drops with reasons — to the user in **Chinese**.
-- **Modify the plan for in-scope must-fix and should-fix items only**; leave in-scope nit items for the user to decide. Never satisfy feedback by adding implementation detail.
-- After updating the plan, increment the round count and return to Step 2 for another review.
+- Report the aggregated list — including downgrades and drops with reasons — in the user's language or the caller's specified report language.
+- Check Step 5 before editing or requesting another review. **Modify the plan for confirmed in-scope must-fix and should-fix items only**; leave nit items for the user to decide. Never satisfy feedback by adding implementation detail.
+- After necessary revisions, return to Step 2 with `<REVIEW_FOCUS>` describing the revised decisions, unresolved findings, and affected interactions. Do not restart a full review of unchanged decisions or reopen settled findings without new evidence.
 
 ## Step 5 - Exit Conditions
 
-**Stop** when any of the following is true:
+**Check completion first**; review passes when either condition is true:
 - Must-fix count AND should-fix count after aggregation in the current round are both 0.
 - The main agent judges all remaining must-fix and should-fix items invalid and gives reasons.
-- The Step 4 Plan-bloat / non-convergence guard fires — pause and hand off to the user with recovery options, do not continue looping until the user picks one.
 
-There is **no hard round cap** — keep looping as long as new in-scope must-fix or should-fix items keep appearing, **but** the non-convergence guard will terminate a runaway loop before it consumes many rounds. Typical healthy convergence is 2–3 rounds; if you are past round 3 and still adding must-fix items, that is a signal that the plan-vs-review scope is mismatched.
+For remaining work, apply these guards:
 
-## Final Report (Chinese)
+- **Stalled review**: if two consecutive follow-up rounds resolve no confirmed issue and add no material evidence, stop repeating the review and report the unresolved issue and blocker. Ask only when a user decision or additional permission is needed. Counts alone, including must-fix staying at zero while should-fix items are resolved, do not establish a stall.
+- Honor any explicit task budget. A stalled review, exhausted budget, or missing required reviewer is incomplete, not approval. Do not rerun an unchanged plan merely to obtain different wording or language.
+
+## Final Report
 
 - How many rounds ran, and what each reviewer found in each round.
 - The final plan version (what changed and why).
 - Not fixed: remaining nit items / must-fix or should-fix items the main agent judged invalid, with reasons.
-- Points the user needs to decide: explicitly ask the user to confirm before implementation.
+- Ask only about unresolved business choices, additional permissions, or a review checkpoint the user explicitly requested. If review passes and implementation is already authorized, continue without another confirmation. If the user requested review only, deliver the review and stop.

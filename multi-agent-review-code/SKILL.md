@@ -1,13 +1,13 @@
 ---
 name: multi-agent-review-code
-description: Use Codex + Antigravity as static-source reviewers in parallel to review a pending diff or branch-vs-master diff, aggregate and deduplicate findings, fix must-fix and should-fix items, and review again until clean. Reviewers may inspect source and git metadata only; they never build, test, install, run, format, lint, or analyze the project. The main agent must allow each live reviewer up to 30 minutes to finish. Use for heavyweight ship-readiness review before release or merge.
+description: Review a code diff with external static reviewers and fix confirmed in-scope findings. Use when the user or an authorized workflow requests a heavyweight review-and-fix loop; ordinary one-pass reviews use audit.
 metadata:
   version: "1.2.1"
 ---
 
 # multi-agent-review-code - Dual-Reviewer Ship-Readiness Loop
 
-Heavyweight quality gate: Codex + Antigravity review the pending diff in parallel -> aggregate -> fix only must-fix items -> review again, looping until clean or the limit is reached.
+Heavyweight quality gate: external reviewers inspect the diff; the main agent fixes confirmed in-scope must-fix and should-fix items, then requests focused verification of those fixes and affected behavior.
 
 ## Hard Scope Contract (Reviewers + Aggregator)
 
@@ -36,7 +36,7 @@ Before starting, determine which of the three scenarios applies to the agent cur
   - Executor is Codex CLI and the user directly asked Codex to "run the review loop" / "review this diff with dual reviewers" → **single-review fallback**.
   - Otherwise → **default dual-review**.
 
-**Round budget**: unlimited review->fix rounds until the current round has no must-fix AND no should-fix items, or one of the Exit conditions below is triggered. Do **not** cap by round count.
+**Review progression**: review the full task diff once. Subsequent rounds cover changes since the previous review, unresolved confirmed findings, and affected paths. Do not reopen settled findings without new evidence. Honor any explicit task budget and the Exit conditions below; a budget or reviewer failure is not a clean review.
 
 ## Static Review And Waiting Contract (Hard Gate)
 
@@ -47,6 +47,7 @@ Before starting, determine which of the three scenarios applies to the agent cur
 - Give every live reviewer the full configured allowance of up to **30 minutes**. Use an outer timeout of at least `1800000` ms and a reviewer timeout of `30m` where supported.
 - When a reviewer call yields a live task or cell, keep waiting on that same task/cell in intervals no longer than 60 seconds until it completes or 30 minutes have elapsed since dispatch. Several minutes without output is normal and is not a reason to interrupt, terminate, retry, or launch a duplicate reviewer.
 - End the wait early only when the reviewer completes, the reviewer process explicitly exits with an error, the user asks to stop, or the actual 30-minute deadline expires. Never kill a live reviewer merely because it appears slow.
+- The 30 minutes is a maximum allowance, not a minimum wait. While a reviewer is running, do independent work that does not change the source it is reviewing; wait only when the next dependent action needs its result.
 
 ## Prompt Length Budget (Hard Gate)
 
@@ -57,11 +58,11 @@ The prompt handed to each reviewer must stay **≤50 lines**, and must **never e
 - **Count the lines of the assembled prompt file before dispatching.** Over 80 lines: move content into files or cut it. Never dispatch an over-budget prompt.
 - When trimming, cut prose and examples first. Keep the hard boundaries intact: scope contract, static-review restriction, and output format.
 
-## Reviewer Language Contract (Hard Gate)
+## Reviewer Language
 
-- Write every reviewer prompt entirely in English, including all instructions and interpolated values such as `<ARGS>` and `<DISMISSED_LIST>`. Faithfully translate user-provided review instructions or prior dismissal summaries into English before inserting them.
-- Do not translate source code, diffs, file paths, identifiers, logs, or other review artifacts; the English-only requirement applies to the reviewer prompt and response, not to repository contents.
-- Every reviewer prompt must explicitly instruct the reviewer to reason in English and output only in English. Reject or re-run a response that is not in English before aggregation.
+- Prefer English reviewer instructions while preserving the user's meaning. Keep source code, diffs, paths, identifiers, logs, and other artifacts unchanged.
+- Accept understandable findings in any language; translate them for aggregation when needed. Never reject or rerun a review solely because of its language.
+- User-facing updates and the final report follow the user's language unless the caller supplies a specific output contract.
 
 ## Per-Round Steps
 
@@ -70,14 +71,14 @@ The prompt handed to each reviewer must stay **≤50 lines**, and must **never e
 Reviewers run git commands themselves to obtain the diff. This skill does not put the diff into the prompt.
 
 - Run `git status` to inspect repository state.
-- If the working tree or index has changes -> `<DIFF_CMD>` = `git diff HEAD`.
-- If the working tree is clean -> `<DIFF_CMD>` = `git diff master...HEAD`, labeled as a **branch-vs-master** review.
-- Do not worry about diff size: the diff is not placed in the prompt, so generated files / large fixtures do not consume prompt budget.
+- On the first round, if the working tree or index has changes -> `<DIFF_CMD>` = `git diff HEAD`; otherwise use `git diff master...HEAD`, labeled as a **branch-vs-master** review. Limit it to the user's task scope if unrelated changes are present; include relevant untracked source separately.
+- On later rounds, keep the original comparison base and narrow `<DIFF_CMD>` to files changed since the last review and affected callers. Describe the new fixes and unresolved findings in `<ARGS>` so reviewers do not repeat the full review of already accepted code.
+- Tool output also consumes context. Inspect source and relevant hunks selectively; use generated artifacts only when they are needed to assess the change.
 
 ### 2. Assemble The Shared Message Body (Same For Both Reviewers, Different Prefix Only)
 
 ```
-Review the pending diff in this repo. First obtain the diff yourself by running (read-only):
+Review the scoped diff in this repo. On follow-up rounds, assess only the new fixes, unresolved findings, and affected behavior described in the focus instruction. First obtain the diff by running (read-only):
   <DIFF_CMD>
 Do not ask me to paste it; run the command and review its output. The repo's coding standards are in CLAUDE.md (Go modernize idioms, surgical changes, minimal abstractions). Check for:
   1. Correctness bugs (off-by-one, nil deref, error swallowing, missing context propagation)
@@ -94,9 +95,9 @@ You are reviewing; do NOT propose code edits — list findings only, each with f
 
 STATIC SOURCE REVIEW ONLY. You may inspect source, repository instructions, git metadata, and diffs with read-only commands. Do NOT build, compile, reconfigure, install, package, test, run binaries or scripts, format, lint, or run analyzers. Do not modify files or generated outputs. The main agent performs verification separately.
 
-Reason in English and output only in English.
+Prefer English output.
 
-Focus instruction from user (may be empty): <ARGS>
+Review focus (user constraints, plus new fixes and unresolved findings on follow-up rounds): <ARGS>
 
 Previously dismissed items (do not re-raise unless you have new evidence that materially changes the judgment): <DISMISSED_LIST>
 ```
@@ -111,8 +112,8 @@ Both reviewers use the same body, each with its own prefix line:
 
 | Reviewer | Prefix line | Perspective |
 |---|---|---|
-| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform a static source review yourself and output findings only. Reason in English and output only in English. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Do NOT build, test, install, execute, format, lint, or run analyzers. Read source and git metadata only; then review and return.` | Deep technical review, edge cases, line-level correctness |
-| Antigravity | `Current working directory (absolute path): <WORKDIR>. Treat this as the repository root and resolve all relative paths from it. Reason in English and output only in English. STATIC SOURCE REVIEW ONLY. Do NOT build, test, install, execute, format, lint, or run analyzers. Do NOT run any git write commands (commit, push, reset, etc.). Git repository and generated outputs are read-only for you. Inspect source and git metadata only, and provide findings as text in your response.` | High-level architecture, design consistency, alternative angles |
+| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform a static source review yourself and output findings only. Prefer English output. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Do NOT build, test, install, execute, format, lint, or run analyzers. Read source and git metadata only; then review and return.` | Deep technical review, edge cases, line-level correctness |
+| Antigravity | `Current working directory (absolute path): <WORKDIR>. Treat this as the repository root and resolve all relative paths from it. Prefer English output. STATIC SOURCE REVIEW ONLY. Do NOT build, test, install, execute, format, lint, or run analyzers. Do NOT run any git write commands (commit, push, reset, etc.). Git repository and generated outputs are read-only for you. Inspect source and git metadata only, and provide findings as text in your response.` | High-level architecture, design consistency, alternative angles |
 
 Transport:
 - Resolve the current working directory to an absolute path when assembling the Antigravity prompt and substitute it for `<WORKDIR>` in the prefix. The absolute path MUST appear in the prompt itself; do not rely on `agy-wrapper` inheriting the correct process working directory.
@@ -146,25 +147,28 @@ Transport:
   4. **Consensus is not evidence**: both reviewers raising the same item does not make it valid or in scope. Apply the Hard Scope Contract and gates 1–3 to agreed items exactly as to single-reviewer items, and do not keep looping to satisfy reviewers on points you have dismissed.
   5. **No partial adoption**: accepting a discarded out-of-scope finding in reduced form is still scope divergence. Only the user can pull one back into scope.
   6. **State the reason** for every downgrade / drop in the aggregated report, so the user can override if they disagree.
-- Before fixing, report the aggregated list — including downgrades and drops with reasons — to the user in Chinese.
+- Before fixing, report the aggregated list — including downgrades and drops with reasons — in the user's language or the caller's specified report language. Check Exit conditions before starting another fix or review round.
 
 ### 5. Fix (When Must-Fix Or Should-Fix Items > 0)
 
-- **Fix both must-fix and should-fix items**; leave nit items for the user to decide.
+- **Fix must-fix and should-fix items confirmed by the main agent as valid and in scope**; leave nit items for the user to decide.
 - Follow CLAUDE.md Rule 2: minimal surgical changes, no opportunistic surrounding refactors.
 - Run any necessary build, tests, formatting, linting, analysis, or runtime verification as the main agent. Never delegate verification to a reviewer.
-- After fixing, increment the round count and return to Step 1.
+- Verify the affected behavior, reusing passing checks on unchanged inputs. Then return to Step 1 for a focused review of the new fixes and affected paths; do not restart a full review of unchanged code.
 
 ### 6. Exit Conditions
 
-**Stop** and summarize when any of the following is true:
+**Check completion first** and summarize when either condition is true:
 - Must-fix count AND should-fix count after aggregation in the current round are both 0.
 - The main agent judges all remaining must-fix and should-fix items invalid and gives reasons (do not loop forever on disagreement).
-- **Diff-growth / non-convergence guard**: the diff is > 1.5× its round-1 size due to review fixes rather than the original task, OR round N's must-fix count is not strictly less than round N-1's. Both indicate the loop is expanding the change instead of correcting it. Pause, report to the user, and let them pick a recovery path before continuing.
 
-There is **no hard round cap** — keep looping as long as new in-scope must-fix or should-fix items keep appearing, **but** the non-convergence guard terminates a runaway loop. Rounds that produce only discarded out-of-scope findings count as convergence, not as new issues.
+For remaining work, apply these guards:
 
-### Final Report (Chinese)
+- **Scope-growth check**: growth beyond 1.5× the round-1 diff is a prompt for the main agent to check scope, not an automatic pause. Keep changes required by the task and remove review-driven scope drift.
+- **Stalled review**: if two consecutive follow-up rounds resolve no confirmed issue and add no material evidence, stop repeating the review and report the unresolved issue and blocker. Ask only when a user decision or additional permission is needed; continue any independent, already authorized work. Counts alone, including must-fix staying at zero while should-fix items are resolved, do not establish a stall.
+- Report budget exhaustion, unavailable reviewers, or unresolved findings as incomplete; never label them clean. Rounds producing only discarded out-of-scope findings count as convergence.
+
+### Final Report
 
 - How many rounds ran, and what each reviewer found in each round.
 - Fixed: list every must-fix and should-fix item and how it was fixed.
