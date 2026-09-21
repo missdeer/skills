@@ -1,8 +1,8 @@
 ---
 name: jira-issue-resolver
-description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root, producing and tersely reviewing a brief change plan, attaching the plan, coding and testing, reviewing code, committing, and writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
+description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root, producing and tersely reviewing a brief change plan, attaching the plan, coding, testing and application black-box verification, reviewing code, committing, and writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
 metadata:
-  version: "1.5.1"
+  version: "1.5.3"
 ---
 
 # jira-issue-resolver
@@ -30,6 +30,7 @@ Start this workflow only when an issue key can be parsed (shape: `PROJECT-123`).
 1. **One run handles only one issue**: follow blocks / depends on / subtask links to find the most upstream root node, and handle only that node. After finding the root, do not go back and handle other nodes, and do not merge multiple issues into one run. If the root is Story-scope (Story type, or Task / Epic type whose scope spans ≥3 loosely coupled deliverables or ≥800-line diff) and has no existing subtasks / linked implementation tasks, follow step 4.5: split into subtasks in JIRA **before** writing a subtask-scoped plan, then **implement only the first subtask** in this run (code + test + review + commit + JIRA writeback), then stop. Leave the remaining subtasks and the parent closeout for later user-triggered runs.
 2. **Do not write code before the plan is approved**: regardless of whether the plan comes from plan mode or normal conversation, do not Edit / Write product code until `/multi-agent-review-plan` has returned "approved".
 3. **Code changes must include matching tests**: after product code is written, add or modify corresponding tests. Changing product code without tests means the phase is incomplete.
+   **Application black-box verification is required before code review**: run the changed web, desktop, or mobile application and verify the affected behavior against the issue's acceptance criteria using step 7.5. Automated tests alone do not satisfy this gate. If verification fails or cannot be performed, stop before `/multi-agent-review-code` and report the blocker.
 4. **Do not commit until `/multi-agent-review-code` converges**: as long as reviewers raise new issues in the `/multi-agent-review-code` loop, keep fixing and reviewing until a full round returns with no new issues. Reintroduced old issues also count as new issues.
 5. **Use the real git commit value for JIRA writeback**: obtain the commit id from `git log -1 --format=%H`; do not rely on memory or reuse a previous hash.
 6. **The plan file must be attached to JIRA**: do not paste it into the body. Upload it as an attachment through the `/jira` skill's attachment interface.
@@ -168,6 +169,18 @@ Implement the current `TARGET`'s approved outcome and acceptance scope. Decide a
 - Existing behavior change -> update affected test assertions, and bind assertions to "why" (business rule), not the current return value (aligned with CLAUDE.md Rule 5).
 - Run tests and confirm they are all green; explain any skipped tests. Silent skips are not allowed.
 
+### 7.5 Application Black-Box Verification (Hard Gate Before Code Review)
+
+Run the changed application and verify the affected workflow against `TARGET`'s expected behavior and acceptance criteria from outside the implementation:
+
+- **Web**: start the application and use `curl` for HTTP-observable behavior or browser CDP for browser interactions and rendered behavior. Verify the running application's responses or UI, not just its internal tests.
+- **Desktop**: build and launch the app in a usable desktop environment; operate its UI and observe the result.
+- **Mobile**: build and launch the app on a device or simulator; operate its UI and observe the result. For iOS, prioritize deployment to a physical iPhone and use Device Hub or iPhone Mirroring to operate and observe the running app. If a physical device is unavailable, record why and use a simulator.
+
+Include the relevant failure path for a bug fix. Record the environment, actions, observed outcome, and pass/fail result; unit/integration tests, code inspection, and a successful build are not substitutes.
+
+Fix mismatches and repeat steps 7 and 7.5 until the behavior matches expectations. If the app cannot be run or its behavior cannot be observed, state the concrete blocker and stop this run before step 8; do not claim verification or proceed to code review. Changes made during review that affect the verified behavior must pass this gate again before the next review round.
+
 ### 8. `/multi-agent-review-code` Multi-Agent Ship-Readiness Loop
 
 **Do not skip this.** Call `/multi-agent-review-code` (multiple reviewers re-review the current changes).
@@ -197,6 +210,7 @@ Use the `/jira` skill on the current round's `TARGET` (in split scenarios this i
 1. **Add a comment** containing:
    - Summary of this change (what was done and which files / modules were affected)
    - Test status (tests added / modified and run results)
+   - For application changes, the black-box environment, observed behavior, and verification result (including why an iOS simulator was used instead of a physical device)
    - Git commit id (full hash + short hash)
    - Branch name (`git rev-parse --abbrev-ref HEAD`)
    - Write all explanatory prose in this comment in Chinese; preserve file names, module names, hashes, and the branch name verbatim.
@@ -222,6 +236,7 @@ Tell the user:
 - Do not turn the brief change plan or any review into a design document. Emit only decisions and actionable gaps; implementation detail belongs to implementation.
 - Do not paste the plan into a JIRA comment instead of an attachment. Long body text harms traceability; use an attachment.
 - Do not change product code without tests. Passing tests does not prove the feature is correct, and future regressions will have no guardrail.
+- Do not enter code review for web, desktop, or mobile changes based only on tests or a successful build; the running app's affected behavior must pass black-box verification first.
 - Do not cherry-pick easy reviewer issues from `/multi-agent-review-code` while skipping harder ones. Fix every actionable issue before the next round.
 - Do not invent a commit id or reuse an old one. Always fetch it live with `git log -1 --format=%H`.
 - Do not handle multiple issues or keep walking the DAG in one run. This skill handles one root node per run and stops after it is done.
