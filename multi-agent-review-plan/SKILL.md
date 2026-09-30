@@ -2,7 +2,7 @@
 name: multi-agent-review-plan
 description: Review a high-level plan with external reviewers before implementation. Use when the user or an authorized workflow requests multi-agent plan review; assess technology choices, architecture, and business rules, not code details.
 metadata:
-  version: "1.2.1"
+  version: "1.3.0"
 ---
 
 # multi-agent-review-plan - Dual-Reviewer Closed-Loop Review For High-Level Plans
@@ -108,25 +108,15 @@ This body is ~20 lines by design, leaving the prefix line and dismissed list com
 | Antigravity | `Current working directory (absolute path): <WORKDIR>. Treat this as the repository root and resolve all relative paths from it. Prefer English output. Do NOT run any git write commands (commit, push, reset, etc.). Git repository is read-only for you. Do NOT modify any files. Read-only operations only — provide findings as text/diff in your response.` | High-level architecture, design consistency, alternative angles |
 
 Transport:
-- Resolve the current working directory to an absolute path when assembling the Antigravity prompt and substitute it for `<WORKDIR>` in the prefix. The absolute path MUST appear in the prompt itself; do not rely on `agy-wrapper` inheriting the correct process working directory.
-- Write the plan to `./tmp/review-plan-<ts>.md` first — both reviewers read the same file, so write it once per round.
-- Write prompts to `./tmp/review-plan-codex-prompt-<ts>.txt` and `./tmp/review-plan-agy-prompt-<ts>.txt` respectively (fallback mode only needs the agy prompt).
-- **Verify the line count of each assembled prompt file before dispatch** (`wc -l`). ≤50 is the target, >80 must not be dispatched.
-- **Prompt files MUST be created using the agent's built-in Write / Edit tools** (Claude Code: `Write`; Codex CLI: its `apply_patch` / file-write tool). Do NOT generate them via shell (`echo`, `cat <<EOF`, `printf`, `tee`, `>` redirection, PowerShell `Set-Content`, etc.) — on Windows Git Bash, shell heredocs and quoting mangle backticks, `$`, backslashes, and CRLF, corrupting the prompt. The built-in file tools write the exact bytes.
-- **Dual-review mode**: issue two background calls side by side in one message (`run_in_background: true`, `timeout: 1800000`) to ensure parallelism. Invoke `codex` and `agy-wrapper` directly in the current shell; do **not** wrap either command in `bash -lc`. Pass each prompt file's exact contents as one argument:
-  ```bash
-  codex exec -s read-only --skip-git-repo-check "$(bat --plain --paging=never ./tmp/review-plan-codex-prompt-<ts>.txt)"
-  ```
-  ```bash
-  agy-wrapper --dangerously-skip-permissions --timeout 30m --print-timeout 30m -p "$(bat --plain --paging=never ./tmp/review-plan-agy-prompt-<ts>.txt)"
-  ```
-  Continue to Step 4 only after both return.
-- **Single-review fallback mode (executor is Codex CLI)**: run only the Antigravity path, invoking `agy-wrapper` directly:
-  ```bash
-  agy-wrapper --dangerously-skip-permissions --timeout 30m --print-timeout 30m -p "$(bat --plain --paging=never ./tmp/review-plan-agy-prompt-<ts>.txt)"
-  ```
-- Use the environment's background execution and result tools (`TaskOutput` or equivalent). Allow up to 30 minutes per reviewer; return immediately on completion or an explicit process error, and do not duplicate a quiet live reviewer. While waiting, do independent authorized work without changing the reviewed plan. Delete temporary files only after reviewers finish.
-- If one CLI is missing (for example `agy-wrapper` is not on PATH), tell the user and continue with the remaining reviewer. Do not pretend the missing reviewer also passed. In fallback mode, if `agy-wrapper` is missing, tell the user this round cannot be reviewed; do not fall back to Codex self-review.
+- Resolve the current working directory to an absolute path when assembling the Antigravity prompt and substitute it for `<WORKDIR>` in the prefix. The absolute path MUST appear in the prompt itself.
+- Write the plan to `./tmp/review-plan-<ts>.md` first — both reviewers use the same file, so write it once per round. Keep the prompt itself within the existing line budget (≤50 target, never >80); do not inline the plan.
+- Before dispatch, check `test "${HERDR_ENV:-}" = 1` as a fast path. This environment variable is not sufficient proof by itself; when it is unset or false, confirm the session with the read-only commands `herdr status` and `herdr pane current --current`. Continue only when those commands identify a current Herdr session or pane; otherwise report that this session is not running inside Herdr and stop. Never invoke an Antigravity CLI directly.
+- Inspect the caller's layout with `herdr pane layout --pane "$HERDR_PANE_ID"`, then cross-reference `herdr pane list --workspace "$HERDR_WORKSPACE_ID"` and `herdr agent list`. Find the existing adjacent pane occupied by the Antigravity/agy agent, then use its returned unique agent name or pane ID. Do not infer IDs from sidebar order, create a pane, or start a replacement agent.
+- **Dual-review mode**: dispatch the Codex sub-reviewer and send the Antigravity prompt to the located Herdr agent side by side with `herdr agent prompt <agy-agent-name-or-pane-id> "<prompt>" --wait --timeout 1800000`. Continue to Step 4 only after both responses return.
+- **Single-review fallback mode (executor is Codex CLI)**: send only the Antigravity prompt through the located Herdr agent with the same `--wait --timeout 1800000` allowance.
+- If a Herdr command is denied by the Codex terminal sandbox, rerun the same `herdr` command with the terminal tool's `require_escalated` approval flow (and a narrowly scoped `herdr` prefix rule when supported); do not bypass Herdr with a direct Antigravity command.
+- Read the Herdr prompt result, or inspect `herdr agent get <target>` and `herdr agent read <target> --source recent-unwrapped --lines 120` when needed. A timeout or stalled response is not proof that delivery failed: inspect the same live agent before retrying. Allow up to 30 minutes, do not terminate or duplicate a quiet reviewer, and retry only after confirming the prior turn did not complete.
+- If Herdr is unavailable, the session is outside Herdr, or no adjacent Antigravity agent can be found, tell the user and continue with Codex only in dual-review mode. In fallback mode, report that this round cannot be reviewed; do not fall back to Codex self-review. Do not start implementation while the requested review is pending.
 - **Do not start implementation** while the requested review is pending. If a reviewer fails or is unavailable, disclose incomplete coverage rather than claiming approval; respect any explicit requirement for all reviewers to pass.
 
 ## Step 4 - Aggregate Feedback And Update The Plan
