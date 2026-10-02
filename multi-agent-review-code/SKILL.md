@@ -1,8 +1,8 @@
 ---
 name: multi-agent-review-code
-description: Review a code diff with external static reviewers and fix confirmed in-scope findings. Use when the user or an authorized workflow requests a heavyweight review-and-fix loop; ordinary one-pass reviews use audit.
+description: Review a code diff by sending prompts through the herdr skill to existing Codex and Antigravity sessions in adjacent panes, and fix confirmed in-scope findings. Use when the user or an authorized workflow requests a heavyweight review-and-fix loop; ordinary one-pass reviews use audit.
 metadata:
-  version: "1.3.0"
+  version: "1.4.0"
 ---
 
 # multi-agent-review-code - Dual-Reviewer Ship-Readiness Loop
@@ -26,14 +26,14 @@ A finding being *technically correct* does not make it in scope. If acting on it
 Before starting, determine which of the three scenarios applies to the agent currently executing this skill:
 
 - **Default (Claude Code, or any non-Codex main agent)**: dual review with Codex + Antigravity in parallel.
-- **Codex as sub-reviewer (invoked by a parent agent through `codex exec` to review a diff)**: **do NOT run this skill at all**. The prompt from the parent agent already contains a review request; just perform the review directly and return findings. Never dispatch Codex, Antigravity, or any other reviewer/agent from here. The Codex prefix line in Step 3 below always carries this instruction, so if you see it in your incoming prompt, exit the skill immediately and just review.
-- **Codex as main agent (a user directly asked Codex CLI to run this review skill)**: **fall back to a single review** by running only Antigravity. Rationale: Codex self-review is equivalent to having the author review their own work, without an independent perspective; keep Antigravity as the external reviewer. In fallback mode:
+- **Codex as sub-reviewer (an existing adjacent Codex session receives a parent agent's prompt through Herdr to review a diff)**: **do NOT run this skill at all**. The prompt from the parent agent already contains a review request; just perform the review directly and return findings. Never dispatch Codex, Antigravity, or any other reviewer/agent from here. The Codex prefix line in Step 3 below always carries this instruction, so if you see it in your incoming prompt, exit the skill immediately and just review.
+- **Codex as main agent (a user directly asked Codex to run this review skill)**: **fall back to a single review** by running only Antigravity. Rationale: Codex self-review is equivalent to having the author review their own work, without an independent perspective; keep Antigravity as the external reviewer. In fallback mode:
   - Step 3 dispatches only Antigravity and skips the Codex path.
   - Step 4 aggregation is done as a "single reviewer"; descriptions such as "both reviewers found this" do not apply.
   - The final report must state that this round used **single-review fallback** mode and explain why, so the user does not mistakenly think Codex also approved it.
 - **How to decide**:
   - Incoming prompt contains the sub-reviewer prefix from Step 3, OR the prompt is a direct review request forwarded by a parent agent → **sub-reviewer bypass**.
-  - Executor is Codex CLI and the user directly asked Codex to "run the review loop" / "review this diff with dual reviewers" → **single-review fallback**.
+  - Executor is Codex and the user directly asked Codex to "run the review loop" / "review this diff with dual reviewers" → **single-review fallback**.
   - Otherwise → **default dual-review**.
 
 **Review progression**: review the full task diff once. Subsequent rounds cover changes since the previous review, unresolved confirmed findings, and affected paths. Do not reopen settled findings without new evidence. Honor any explicit task budget and the Exit conditions below; a budget or reviewer failure is not a clean review.
@@ -44,9 +44,9 @@ Before starting, determine which of the three scenarios applies to the agent cur
 - Reviewers must **never** build, compile, reconfigure, install, package, test, execute project binaries or scripts, format, lint, or run static/dynamic analyzers. This prohibition applies even when a reviewer believes verification would strengthen a finding.
 - The main agent owns all build, test, formatter, linter, analyzer, and runtime verification outside reviewer sessions. After fixing findings, the main agent may run appropriate verification before dispatching the next static review round.
 - Every reviewer prompt must repeat these restrictions explicitly. A generic "read-only" instruction is insufficient because builds and tests can still mutate generated outputs.
-- Give every live reviewer the full configured allowance of up to **30 minutes**. Use an outer timeout of at least `1800000` ms and a reviewer timeout of `30m` where supported.
-- When a reviewer call yields a live task or cell, keep waiting on that same task/cell in intervals no longer than 60 seconds until it completes or 30 minutes have elapsed since dispatch. Several minutes without output is normal and is not a reason to interrupt, terminate, retry, or launch a duplicate reviewer.
-- End the wait early only when the reviewer completes, the reviewer process explicitly exits with an error, the user asks to stop, or the actual 30-minute deadline expires. Never kill a live reviewer merely because it appears slow.
+- Give every live reviewer the full configured allowance of up to **30 minutes**. Use `herdr agent prompt --wait --timeout 1800000` and an outer timeout of at least `1800000` ms.
+- When a reviewer call yields a live task or cell, keep waiting on that same task/cell or Herdr agent in intervals no longer than 60 seconds until it completes or 30 minutes have elapsed since dispatch. Several minutes without output is normal and is not a reason to interrupt, terminate, retry, or launch a duplicate reviewer.
+- End the wait early only when the reviewer completes, exits with an error, becomes blocked awaiting user input, the user asks to stop, or the actual 30-minute deadline expires. Never kill a live reviewer merely because it appears slow.
 - The 30 minutes is a maximum allowance, not a minimum wait. While a reviewer is running, do independent work that does not change the source it is reviewing; wait only when the next dependent action needs its result.
 
 ## Prompt Length Budget (Hard Gate)
@@ -112,19 +112,22 @@ Both reviewers use the same body, each with its own prefix line:
 
 | Reviewer | Prefix line | Perspective |
 |---|---|---|
-| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. You are invoked as a sub-reviewer — perform a static source review yourself and output findings only. Prefer English output. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill. Do NOT call agy-wrapper, codex exec, or any other reviewer/agent. Do NOT build, test, install, execute, format, lint, or run analyzers. Read source and git metadata only; then review and return.` | Deep technical review, edge cases, line-level correctness |
+| Codex | `Execute directly without asking for confirmation. Do not repeat or echo the request back. Current working directory (absolute path): <WORKDIR>. Treat this as the repository root and resolve all relative paths from it. You are invoked as a sub-reviewer — perform a static source review yourself and output findings only. Prefer English output. Do NOT invoke the multi-agent-review-plan or multi-agent-review-code skill or call any other reviewer/agent. Do NOT build, test, install, execute, format, lint, or run analyzers. Do NOT modify files or run git write commands. Read source and git metadata only; then review and return.` | Deep technical review, edge cases, line-level correctness |
 | Antigravity | `Current working directory (absolute path): <WORKDIR>. Treat this as the repository root and resolve all relative paths from it. Prefer English output. STATIC SOURCE REVIEW ONLY. Do NOT build, test, install, execute, format, lint, or run analyzers. Do NOT run any git write commands (commit, push, reset, etc.). Git repository and generated outputs are read-only for you. Inspect source and git metadata only, and provide findings as text in your response.` | High-level architecture, design consistency, alternative angles |
 
-Transport:
-- Resolve the current working directory to an absolute path when assembling the Antigravity prompt and substitute it for `<WORKDIR>` in the prefix. The absolute path MUST appear in the prompt itself.
-- Before dispatch, check `test "${HERDR_ENV:-}" = 1` as a fast path. This environment variable is not sufficient proof by itself; when it is unset or false, confirm the session with the read-only commands `herdr status` and `herdr pane current --current`. Continue only when those commands identify a current Herdr session or pane; otherwise report that this session is not running inside Herdr and stop. Never invoke an Antigravity CLI directly.
-- Inspect the caller's layout with `herdr pane layout --pane "$HERDR_PANE_ID"`, then cross-reference `herdr pane list --workspace "$HERDR_WORKSPACE_ID"` and `herdr agent list`. Find the existing adjacent pane occupied by the Antigravity/agy agent, then use its returned unique agent name or pane ID. Do not infer IDs from sidebar order, create a pane, or start a replacement agent.
-- Keep the assembled prompts within the existing line budget (≤50 target, never >80). The plan/diff and other bulk material stay in repository files; send only the concise prompt body and file paths through Herdr. Do not pass prompts to `agy` or `agy-wrapper`, and do not use those commands.
-- **Dual-review mode**: dispatch the Codex sub-reviewer and the Herdr prompt to the existing Antigravity agent side by side. Send the Antigravity prompt with `herdr agent prompt <agy-agent-name-or-pane-id> "<prompt>" --wait --timeout 1800000`. Keep the Codex path unchanged, and continue to Step 4 only after both responses return.
-- **Single-review fallback mode (executor is Codex CLI)**: send only the Antigravity prompt through the located Herdr agent with the same `--wait --timeout 1800000` allowance.
-- If a Herdr command is denied by the Codex terminal sandbox, rerun the same `herdr` command with the terminal tool's `require_escalated` approval flow (and a narrowly scoped `herdr` prefix rule when supported); do not bypass Herdr with a direct Antigravity command.
-- Poll the same live Herdr agent at intervals no longer than 60 seconds while it is working, for up to 30 minutes. A timeout or stalled response is not proof that delivery failed: inspect `herdr agent get <target>` and `herdr agent read <target> --source recent-unwrapped --lines 120` before retrying. Do not terminate or duplicate a quiet reviewer. Retry only after confirming the previous turn did not complete.
-- If Herdr is unavailable, the session is outside Herdr, or no adjacent Antigravity agent can be found, **tell the user** and continue with Codex only in dual-review mode. In fallback mode, report that this round cannot be reviewed; do not fall back to Codex self-review.
+Transport through the `herdr` skill:
+- Read and follow the `herdr` skill for session detection, live agent discovery, prompt submission, waiting, and response retrieval. Use the installed `herdr --help` and command groups for current syntax.
+- Resolve the current repository root to an absolute path and substitute it for `<WORKDIR>` in both prefixes. Tell existing sessions to use this request's scope and context rather than assumptions from earlier pane work.
+- Check `test "${HERDR_ENV:-}" = 1` as a fast path. When unset or false, confirm the session with the read-only commands `herdr status` and `herdr pane current --current`. If no current session or pane is identified, report that this session is not running inside Herdr and stop. Do not invoke a headless Codex process, use a command-line fallback, or invoke a direct Antigravity CLI.
+- Inspect the caller's layout with `herdr pane layout --pane <caller-pane-id>`, then cross-reference `herdr pane list --workspace <workspace-id>` and `herdr agent list` to locate existing adjacent Codex and Antigravity/agy sessions. Use IDs returned by discovery when environment IDs are unavailable. Target each returned unique agent name or pane ID, never the calling pane. Do not infer IDs from sidebar order, create a pane, or start a replacement agent.
+- Confirm each target is ready (`idle` or `done`) before submitting. If working, wait for that turn to settle; if blocked, inspect the UI and ask the user before answering it. An unknown state is not proof of readiness.
+- Keep prompts within the existing line budget (≤50 target, never >80). Bulk material stays in files accessible from the specified repository root; send the concise prompt and file paths as one literal argument using a structured tool call or safe shell quoting.
+- **Dual-review mode**: dispatch both prompts in parallel with `herdr agent prompt <codex-agent-name-or-pane-id> "<codex-prompt>" --wait --timeout 1800000` and `herdr agent prompt <agy-agent-name-or-pane-id> "<agy-prompt>" --wait --timeout 1800000`. Continue to Step 4 after both responses are retrieved or an unavailable reviewer is explicitly reported.
+- **Single-review fallback mode (executor is Codex)**: send only the Antigravity prompt through its existing Herdr session with the same `--wait --timeout 1800000` allowance.
+- If a Herdr command is denied by the terminal sandbox, rerun that same command through the terminal tool's `require_escalated` approval flow with a narrowly scoped `herdr` prefix rule when supported.
+- Retrieve each response with `herdr agent read <target> --source recent-unwrapped --lines 120`; use `herdr agent get <target>` to inspect state. Wait on the same live call or agent in intervals no longer than 60 seconds, for up to 30 minutes. A timeout or stalled response does not prove delivery failed: inspect state and output before deciding whether a retry is warranted. Do not duplicate a live request or interrupt a quiet reviewer.
+- If a larger recent read still cannot recover the completed response, follow the `herdr` skill's temporary Markdown file fallback. Do not request file output in the initial prompt.
+- If an adjacent reviewer is unavailable, tell the user and use only the available external reviewer in dual-review mode, disclosing incomplete coverage. If neither is available, or Antigravity is unavailable in single-review fallback mode, report that this round cannot be reviewed. A missing required reviewer is not approval; do not substitute Codex self-review or a headless process.
 
 ### 4. Aggregate Findings
 

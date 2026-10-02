@@ -1,8 +1,8 @@
 ---
 name: jira-issue-resolver
-description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root, producing and tersely reviewing a brief change plan, attaching the plan, coding, testing and application black-box verification, reviewing code, committing, and writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
+description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root, producing and tersely reviewing a brief change plan through Herdr-connected Codex and Antigravity sessions, attaching the plan, coding, testing and application black-box verification, reviewing code, committing, and writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
 metadata:
-  version: "1.5.3"
+  version: "1.5.4"
 ---
 
 # jira-issue-resolver
@@ -109,7 +109,7 @@ Complexity may justify more investigation, never a longer emitted plan. Exceed t
 
 ### 4. `/multi-agent-review-plan` Review Loop
 
-**Do not skip this.** After writing the plan, immediately call `/multi-agent-review-plan` (the command distributes the plan to Codex + AntiGravity for read-only review).
+**Do not skip this.** After writing the plan, immediately call `/multi-agent-review-plan`. That skill sends the review prompt through Herdr to the existing adjacent Codex and Antigravity sessions for read-only review; do not launch a separate command-line or headless Codex process.
 
 - Collect all reviewer feedback.
 - Pass this **concise review contract** to every reviewer; it overrides that skill's normal report verbosity for this workflow:
@@ -183,13 +183,13 @@ Fix mismatches and repeat steps 7 and 7.5 until the behavior matches expectation
 
 ### 8. `/multi-agent-review-code` Multi-Agent Ship-Readiness Loop
 
-**Do not skip this.** Call `/multi-agent-review-code` (multiple reviewers re-review the current changes).
+**Do not skip this.** Call `/multi-agent-review-code`. That skill sends review prompts through Herdr to the existing adjacent Codex and Antigravity sessions; do not launch a separate command-line or headless Codex process.
 
 - Pass every reviewer the same restraint standard: return actionable findings only, one sentence each with severity and location; omit praise, summaries, category boilerplate, detailed remediation plans, nits, speculative concerns, and round narration. A clean review returns `no actionable findings`. Brevity changes presentation, not review coverage.
 - Aggregate by deduplicating findings and listing only issues that require a change. Do not expose discarded findings unless one blocks convergence.
 - As long as there are new issues (even regressions introduced by the previous fix) -> fix -> run `/multi-agent-review-code` again.
 - Continue until a full reviewer round raises no new issues.
-- During the loop, you may use `/audit` / `/codex` / `/agy` for focused consultation as appropriate.
+- During the loop, you may use `/audit` / `/codex` / `/agy` for focused consultation as appropriate; `/codex` and `/agy` use their existing adjacent Herdr sessions.
 
 ### 9. `/commit`
 
