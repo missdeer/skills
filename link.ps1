@@ -2,6 +2,7 @@
 $ErrorActionPreference = 'Stop'
 
 $SrcDir = Join-Path $HOME '.codex\skills'
+$AgentsDir = Join-Path $HOME '.agents\skills'
 if ($env:CLAUDE_CONFIG_DIR) {
     $ClaudeDir = Join-Path $env:CLAUDE_CONFIG_DIR 'skills'
 } else {
@@ -18,12 +19,14 @@ function Make-Link {
     Write-Host "linked: $Dst -> $Src"
 }
 
+New-Item -ItemType Directory -Force -Path $AgentsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $ClaudeDir | Out-Null
 New-Item -ItemType Directory -Force -Path $GeminiDir | Out-Null
 
 Get-ChildItem -LiteralPath $SrcDir -Directory | ForEach-Object {
     $name = $_.Name
     $src = $_.FullName
+    Make-Link -Src $src -Dst (Join-Path $AgentsDir $name)
     Make-Link -Src $src -Dst (Join-Path $ClaudeDir $name)
     Make-Link -Src $src -Dst (Join-Path $GeminiDir $name)
 }
