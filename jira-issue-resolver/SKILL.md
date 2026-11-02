@@ -1,8 +1,8 @@
 ---
 name: jira-issue-resolver
-description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root, producing and tersely reviewing a brief change plan through Herdr-connected Codex and Antigravity sessions, attaching the plan, coding, testing and application black-box verification, reviewing code, committing, and writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
+description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root, creating an isolated Git worktree, producing and tersely reviewing a brief change plan through Herdr-connected Codex and Antigravity sessions, attaching the plan, coding, testing and application black-box verification, reviewing code, committing, integrating into the main branch with rebase and fast-forward, and writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
 metadata:
-  version: "1.5.4"
+  version: "1.6.0"
 ---
 
 # jira-issue-resolver
@@ -32,13 +32,14 @@ Start this workflow only when an issue key can be parsed (shape: `PROJECT-123`).
 3. **Code changes must include matching tests**: after product code is written, add or modify corresponding tests. Changing product code without tests means the phase is incomplete.
    **Application black-box verification is required before code review**: run the changed web, desktop, or mobile application and verify the affected behavior against the issue's acceptance criteria using step 7.5. Automated tests alone do not satisfy this gate. If verification fails or cannot be performed, stop before `/multi-agent-review-code` and report the blocker.
 4. **Do not commit until `/multi-agent-review-code` converges**: as long as reviewers raise new issues in the `/multi-agent-review-code` loop, keep fixing and reviewing until a full round returns with no new issues. Reintroduced old issues also count as new issues.
-5. **Use the real git commit value for JIRA writeback**: obtain the commit id from `git log -1 --format=%H`; do not rely on memory or reuse a previous hash.
+5. **Write back only the final integrated commit**: after step 9.5 succeeds, obtain the commit id from `git -C "$REPO_ROOT" log -1 --format=%H` on the main branch. Rebase can change commit ids; do not write a pre-rebase hash or claim completion before fast-forward integration succeeds.
 6. **The plan file must be attached to JIRA**: do not paste it into the body. Upload it as an attachment through the `/jira` skill's attachment interface.
 Invariants 7-9 constrain three independent axes — **depth** (how far down), **breadth** (how far out), **granularity** (how many pieces). A plan can satisfy one and violate another, so check all three.
 
 7. **Depth and length — produce only a brief change plan**: the plan is a terse list of intended changes, not a design document or detailed solution. The author and reviewers must omit implementation detail, extended rationale, alternatives, architecture walkthroughs, and exhaustive flows.
 8. **Breadth — scope is defined by the JIRA issue, and only by it**: the plan answers exactly what `TARGET`'s description and acceptance criteria ask, nothing more. Content that does not trace back to a line in the issue is out of scope by default and must be removed — including hypothetical edge cases, speculative failure modes, and peripheral concerns. This binds the plan author and every reviewer equally: the default answer to "should we also cover X?" is **no** unless X is required to satisfy the stated acceptance criteria, and out-of-scope reviewer requests are discarded regardless of severity label. Work subtract-first — when a round ends with the plan longer than it started, justify it in one sentence or revert the growth.
 9. **Granularity — restraint on splitting**: creating linked tasks under a story or subtasks under a task is a heavy operation that forces multiple runs and delays delivery. Carefully evaluate necessity, never split over minor issues, and when in doubt do not split (see step 4.5).
+10. **Isolate all repository writes**: before creating or modifying any repository files, including local plans, create a dedicated worktree under `$REPO_ROOT/.worktree/` as described in step 2.75. Perform implementation, tests, application verification, and review fixes there. After review converges, commit in that worktree, rebase onto the main branch, fast-forward the main branch, and only then write the final commit id to JIRA. Remove this worktree only after integration and all JIRA writes succeed. The parent closeout shortcut needs no worktree.
 
 ## Steps
 
@@ -74,14 +75,35 @@ Tell the user: "The issue X you provided depends on Y (and Y depends on Z, which
 - **Status-only completion rule**: for parent closeout, a subtask's Jira status is the sole authority on whether that subtask is complete. Do not inspect or reinterpret its description, acceptance details, comments, attachments, tests, commits, or other internal evidence to challenge a Resolved / Closed / Done status. Internal completion belongs to the subtask workflow and must not be re-audited from the parent.
 - **Convention**: parent tasks should not contain independent implementation work. All deliverable work belongs to subtasks. Stop only when the parent explicitly contains work that is not assigned to any subtask at all; do not infer unfinished parent work by re-evaluating the internals of a completed subtask.
 
-When the conditions are met, close out as follows (**skip steps 3-9 and go directly to this section's writeback**):
+When the conditions are met, close out as follows (**skip steps 2.75-9.5 and go directly to this section's writeback**):
 
 1. Use the `/jira` skill to summarize every subtask's key, status, and commit short hash recorded in each subtask's comments. Reading comments here is only for summary extraction and must not affect the completion decision; if a hash is unavailable, record it as unavailable and continue.
 2. Add a comment to `TARGET`: list all subtask keys, commit short hashes, and delivery notes; conclude in one sentence that all subtasks are complete and the parent is being closed out.
 3. **Transition status**: based on the transitions currently available on `TARGET`, move it to the appropriate next status (usually "In Review" or "Resolved", depending on the team workflow and the parent's role); ask the user if unsure.
 4. Go directly to step 11 for closeout and end this run. **Do not** trigger plan, code, test, review, or commit.
 
-If the conditions are not met, skip this section and continue to step 3.
+If the conditions are not met, continue to step 2.75.
+
+### 2.75 Create An Isolated Worktree Before Any Repository File Writes
+
+Resolve `REPO_ROOT` to the repository's primary checkout and `MAIN_BRANCH` to its actual main development branch (for example `main` or `master`), using repository instructions and Git refs rather than assuming the current branch is the main branch. Inspect `git worktree list --porcelain` and the primary checkout's status. Preserve unrelated changes; if the destination checkout is dirty, stop before integration until those changes are handled separately.
+
+Create a new branch and worktree from `MAIN_BRANCH`, for example:
+
+```bash
+WORK_BRANCH="jira-$TARGET"
+WORKTREE_DIR="$REPO_ROOT/.worktree/$WORK_BRANCH"
+git -C "$REPO_ROOT" worktree add -b "$WORK_BRANCH" "$WORKTREE_DIR" "$MAIN_BRANCH"
+VALIDATED_BASE=$(git -C "$WORKTREE_DIR" rev-parse HEAD)
+```
+
+- Ensure `.worktree/` is ignored before creation. If it is not already ignored, add `/.worktree/` to the common repository's local `info/exclude`; do not modify a tracked `.gitignore` for this workflow setup.
+- If the branch or path already exists, use a unique prefix while keeping the issue key as the name suffix (for example `jira-2-SHELFECOMM-14`); do not overwrite an existing worktree or branch.
+- Set `project_root_dir` to `WORKTREE_DIR` and run all subsequent repository edits and commands there, including plan files, builds, tests, application launches, and `/commit`. Give every Herdr reviewer the absolute worktree path and `MAIN_BRANCH` as the diff base so it reviews this worktree's changes.
+- If step 4.5 later relocks `TARGET` to a new subtask, keep this isolated worktree and implement only that subtask; use the final `TARGET` in the commit and JIRA writeback.
+- Read-only investigation may precede creation. No repository file writes may precede it, and product code still requires plan approval.
+
+Continue to step 3 only after worktree creation succeeds.
 
 ### 3. Produce A Brief Change Plan
 
@@ -191,38 +213,70 @@ Fix mismatches and repeat steps 7 and 7.5 until the behavior matches expectation
 - Continue until a full reviewer round raises no new issues.
 - During the loop, you may use `/audit` / `/codex` / `/agy` for focused consultation as appropriate; `/codex` and `/agy` use their existing adjacent Herdr sessions.
 
-### 9. `/commit`
+### 9. `/commit` In The Worktree
 
-After `/multi-agent-review-code` converges, call the `/commit` skill to commit local changes. Include the JIRA key in the commit message (for example `(TARGET-KEY)`) for traceability.
+After `/multi-agent-review-code` converges, call the `/commit` skill from `WORKTREE_DIR` to commit only the current `TARGET`'s changes. Include the JIRA key in the commit message (for example `(TARGET-KEY)`) for traceability. Keep local plan and build artifacts out of the commit unless they are part of the approved deliverable.
 
-After committing, obtain the commit id:
+This commit is the input to rebase, not yet the final id for JIRA. Continue to step 9.5; do not write the commit id back yet.
 
-```bash
-git log -1 --format=%H
-```
+### 9.5 Rebase And Fast-Forward Into The Main Branch (Hard Gate)
 
-Record the short hash (first 12 characters) and the full hash for later use.
+Integration belongs to this workflow, outside the `/commit` skill:
+
+1. Require a clean implementation worktree and a clean destination checkout, and ensure the primary checkout is on `MAIN_BRANCH` (switch only when clean). Compare its current tip with `VALIDATED_BASE`, initially recorded at worktree creation.
+2. Rebase the work branch onto the current local main branch:
+
+   ```bash
+   git -C "$WORKTREE_DIR" rebase "$MAIN_BRANCH"
+   ```
+
+   Resolve conflicts only within `TARGET`'s scope. If the base changed since validation or conflicts required edits, rerun the affected tests, step 7.5 application verification, and step 8 review against the rebased result before integration. Commit any review fixes in the worktree via step 9 and repeat as needed. After these gates pass, update `VALIDATED_BASE` to the main branch tip used by this rebase. Do not integrate while rebase, verification, or review is incomplete.
+3. Fast-forward the primary checkout:
+
+   ```bash
+   git -C "$REPO_ROOT" merge --ff-only "$WORK_BRANCH"
+   ```
+
+   If the main branch advanced and fast-forward fails, rebase onto its new tip and repeat the required verification and review before retrying. Do not use a merge commit, force-update the main branch, or reset away unrelated work. Stop and report any unresolved blocker; do not report the issue as delivered.
+4. Confirm the main branch tip equals the work branch tip and the destination checkout is clean. Obtain the final commit id from the main checkout:
+
+   ```bash
+   git -C "$REPO_ROOT" log -1 --format=%H
+   ```
+
+Record the full hash and its first 12 characters for step 10. No additional commit is needed after fast-forward, and this workflow does not push automatically.
 
 ### 10. Write Back To JIRA: Status + Change Notes + Commit Id
 
-Use the `/jira` skill on the current round's `TARGET` (in split scenarios this is `SUBTASKS[0]`; otherwise it is the original root issue):
+Only after step 9.5 succeeds, use the `/jira` skill on the current round's `TARGET` (in split scenarios this is `SUBTASKS[0]`; otherwise it is the original root issue):
 
 1. **Add a comment** containing:
    - Summary of this change (what was done and which files / modules were affected)
    - Test status (tests added / modified and run results)
    - For application changes, the black-box environment, observed behavior, and verification result (including why an iOS simulator was used instead of a physical device)
-   - Git commit id (full hash + short hash)
-   - Branch name (`git rev-parse --abbrev-ref HEAD`)
+   - Final Git commit id on the main branch after rebase and fast-forward (full hash + short hash)
+   - Main branch name (`git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD`) and confirmation that fast-forward integration succeeded
    - Write all explanatory prose in this comment in Chinese; preserve file names, module names, hashes, and the branch name verbatim.
 2. **Transition status**: based on the issue's current status and available transitions, move it to the appropriate next status (usually "In Review" or "Resolved", depending on the team workflow). First list available transitions with `/jira`, then pick the transition that best matches "code complete, awaiting acceptance"; ask the user if unsure.
 
 Do **not** write back status to the story itself during this run.
 
+### 10.5 Remove The Worktree After Successful Completion
+
+Only after step 9.5 integration and all step 10 JIRA writes succeed, confirm that the worktree has no uncommitted changes and its branch tip is contained in `MAIN_BRANCH`. Stop any application or build processes started in it, switch the agent's working directory to `REPO_ROOT`, and remove the worktree:
+
+```bash
+git -C "$REPO_ROOT" worktree remove "$WORKTREE_DIR"
+```
+
+Confirm that the path no longer exists and `git worktree list --porcelain` no longer lists it. Keep the branch; deleting the worktree does not require deleting its branch. If an earlier gate failed, preserve the worktree for recovery. If removal fails or uncommitted changes remain, do not force removal; report the remaining path and blocker instead of claiming cleanup succeeded. The step 2.5 parent closeout shortcut skips this step.
+
 ### 11. Closeout
 
 Tell the user:
 - Which `TARGET` was handled (if different from the user-provided key, state that again).
-- Commit id and the new JIRA status (if the step 2.5 parent closeout shortcut was used, explain that there were no code changes and only the closeout status changed from X to Y).
+- Final commit id on the main branch, successful rebase and fast-forward integration, and the new JIRA status (if the step 2.5 parent closeout shortcut was used, explain that there were no code changes and only the closeout status changed from X to Y).
+- For implementation runs, confirm that the worktree was removed, or report its remaining path and cleanup blocker.
 - Split scenario: additionally tell the user that story `<key>` has been split into `SUBTASKS = [...]`, this run implemented `SUBTASKS[0]`, the next trigger of this skill will automatically pick `SUBTASKS[1]` (by step 2's DAG decision), and after all subtasks are complete, triggering this skill once more with the story key will use step 2.5 to close the story.
 - Step 2.5 closeout shortcut scenario: explicitly tell the user that parent `<key>` was closed out based on all subtasks being complete, and this run produced no code changes / commit.
 - If there are still unhandled downstream issues (the ones skipped in step 2), tell the user: "To continue, trigger this skill again for <next key>."
@@ -238,7 +292,8 @@ Tell the user:
 - Do not change product code without tests. Passing tests does not prove the feature is correct, and future regressions will have no guardrail.
 - Do not enter code review for web, desktop, or mobile changes based only on tests or a successful build; the running app's affected behavior must pass black-box verification first.
 - Do not cherry-pick easy reviewer issues from `/multi-agent-review-code` while skipping harder ones. Fix every actionable issue before the next round.
-- Do not invent a commit id or reuse an old one. Always fetch it live with `git log -1 --format=%H`.
+- Do not edit repository files in the original checkout or create local plans before the dedicated `.worktree/` worktree exists.
+- Do not invent a commit id, reuse an old one, or write a pre-rebase hash to JIRA. Fetch it live from the main checkout only after successful fast-forward integration in step 9.5.
 - Do not handle multiple issues or keep walking the DAG in one run. This skill handles one root node per run and stops after it is done.
 - Do not continue the workflow for an already Closed issue. Step 1 should stop it.
 - Do not skip splitting when a Story or a Story-scope Task / Epic has no subtasks and then implement 500+ lines after plan approval. That violates step 4.5; overly large granularity makes review and regression risk impossible to contain. Type == "Task" is NOT a get-out-of-splitting card — scope is what matters.
