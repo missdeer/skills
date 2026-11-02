@@ -14,7 +14,7 @@ MINGW* | MSYS* | CYGWIN*)
   ;;
 esac
 
-SRC_DIR="$PWD"
+SRC_DIR="$SCRIPT_DIR"
 AGENTS_DIR="${HOME}/.agents/skills"
 if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
   CLAUDE_DIR="${CLAUDE_CONFIG_DIR}/skills"
