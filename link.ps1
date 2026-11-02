@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 $ErrorActionPreference = 'Stop'
 
-$SrcDir = Join-Path $HOME '.codex\skills'
+$SrcDir = $PSScriptRoot
 $AgentsDir = Join-Path $HOME '.agents\skills'
 if ($env:CLAUDE_CONFIG_DIR) {
     $ClaudeDir = Join-Path $env:CLAUDE_CONFIG_DIR 'skills'
