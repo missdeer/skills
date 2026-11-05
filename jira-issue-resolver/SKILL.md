@@ -1,6 +1,6 @@
 ---
 name: jira-issue-resolver
-description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root, creating an isolated Git worktree, producing and tersely reviewing a brief change plan through Herdr-connected Codex and Antigravity sessions, attaching the plan, coding, testing and application black-box verification, reviewing code, committing, integrating into the main branch with rebase and fast-forward, and writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
+description: End-to-end JIRA issue resolution workflow. Trigger for intents such as "resolve JIRA XXXX-nn", "fix XXXX-nn", "handle XXXX-nn", or a jira.ismisv.com/browse/ URL. It runs the full loop of finding the DAG root, creating an isolated Git worktree, producing and self-checking a brief change plan, attaching the plan, coding, testing and application black-box verification, reviewing code, committing, integrating into the main branch with rebase and fast-forward, and writing back to JIRA. One run handles only one issue. If a story has no subtasks, split it first and implement only the first subtask; if all subtasks of a parent are complete, use the parent closeout shortcut.
 metadata:
   version: "1.6.0"
 ---
@@ -28,7 +28,7 @@ Start this workflow only when an issue key can be parsed (shape: `PROJECT-123`).
 ## Key Invariants (Stop If Violated)
 
 1. **One run handles only one issue**: follow blocks / depends on / subtask links to find the most upstream root node, and handle only that node. After finding the root, do not go back and handle other nodes, and do not merge multiple issues into one run. If the root is Story-scope (Story type, or Task / Epic type whose scope spans ≥3 loosely coupled deliverables or ≥800-line diff) and has no existing subtasks / linked implementation tasks, follow step 4.5: split into subtasks in JIRA **before** writing a subtask-scoped plan, then **implement only the first subtask** in this run (code + test + review + commit + JIRA writeback), then stop. Leave the remaining subtasks and the parent closeout for later user-triggered runs.
-2. **Do not write code before the plan is approved**: regardless of whether the plan comes from plan mode or normal conversation, do not Edit / Write product code until `/multi-agent-review-plan` has returned "approved".
+2. **Finalize the plan before writing code**: regardless of whether the plan comes from plan mode or normal conversation, complete the step 4 self-check (or adopt an existing approved plan under step 3) before editing product code.
 3. **Code changes must include matching tests**: after product code is written, add or modify corresponding tests. Changing product code without tests means the phase is incomplete.
    **Application black-box verification is required before code review**: run the changed web, desktop, or mobile application and verify the affected behavior against the issue's acceptance criteria using step 7.5. Automated tests alone do not satisfy this gate. If verification fails or cannot be performed, stop before `/multi-agent-review-code` and report the blocker.
 4. **Do not commit until `/multi-agent-review-code` converges**: as long as reviewers raise new issues in the `/multi-agent-review-code` loop, keep fixing and reviewing until a full round returns with no new issues. Reintroduced old issues also count as new issues.
@@ -36,8 +36,8 @@ Start this workflow only when an issue key can be parsed (shape: `PROJECT-123`).
 6. **The plan file must be attached to JIRA**: do not paste it into the body. Upload it as an attachment through the `/jira` skill's attachment interface.
 Invariants 7-9 constrain three independent axes — **depth** (how far down), **breadth** (how far out), **granularity** (how many pieces). A plan can satisfy one and violate another, so check all three.
 
-7. **Depth and length — produce only a brief change plan**: the plan is a terse list of intended changes, not a design document or detailed solution. The author and reviewers must omit implementation detail, extended rationale, alternatives, architecture walkthroughs, and exhaustive flows.
-8. **Breadth — scope is defined by the JIRA issue, and only by it**: the plan answers exactly what `TARGET`'s description and acceptance criteria ask, nothing more. Content that does not trace back to a line in the issue is out of scope by default and must be removed — including hypothetical edge cases, speculative failure modes, and peripheral concerns. This binds the plan author and every reviewer equally: the default answer to "should we also cover X?" is **no** unless X is required to satisfy the stated acceptance criteria, and out-of-scope reviewer requests are discarded regardless of severity label. Work subtract-first — when a round ends with the plan longer than it started, justify it in one sentence or revert the growth.
+7. **Depth and length — produce only a brief change plan**: the plan is a terse list of intended changes, not a design document or detailed solution. The plan must omit implementation detail, extended rationale, alternatives, architecture walkthroughs, and exhaustive flows.
+8. **Breadth — scope is defined by the JIRA issue, and only by it**: the plan answers exactly what `TARGET`'s description and acceptance criteria ask, nothing more. Content that does not trace back to a line in the issue is out of scope by default and must be removed — including hypothetical edge cases, speculative failure modes, and peripheral concerns. This binds plan authoring and self-checking equally: the default answer to "should we also cover X?" is **no** unless X is required to satisfy the stated acceptance criteria, and out-of-scope reviewer requests are discarded regardless of severity label. Work subtract-first — when a self-check leaves the plan longer than it started, justify it in one sentence or revert the growth.
 9. **Granularity — restraint on splitting**: creating linked tasks under a story or subtasks under a task is a heavy operation that forces multiple runs and delays delivery. Carefully evaluate necessity, never split over minor issues, and when in doubt do not split (see step 4.5).
 10. **Isolate all repository writes**: before creating or modifying any repository files, including local plans, create a dedicated worktree under `$REPO_ROOT/.worktree/` as described in step 2.75. Perform implementation, tests, application verification, and review fixes there. After review converges, commit in that worktree, rebase onto the main branch, fast-forward the main branch, and only then write the final commit id to JIRA. Remove this worktree only after integration and all JIRA writes succeed. The parent closeout shortcut needs no worktree.
 
@@ -101,7 +101,7 @@ VALIDATED_BASE=$(git -C "$WORKTREE_DIR" rev-parse HEAD)
 - If the branch or path already exists, use a unique prefix while keeping the issue key as the name suffix (for example `jira-2-SHELFECOMM-14`); do not overwrite an existing worktree or branch.
 - Set `project_root_dir` to `WORKTREE_DIR` and run all subsequent repository edits and commands there, including plan files, builds, tests, application launches, and `/commit`. Give every Herdr reviewer the absolute worktree path and `MAIN_BRANCH` as the diff base so it reviews this worktree's changes.
 - If step 4.5 later relocks `TARGET` to a new subtask, keep this isolated worktree and implement only that subtask; use the final `TARGET` in the commit and JIRA writeback.
-- Read-only investigation may precede creation. No repository file writes may precede it, and product code still requires plan approval.
+- Read-only investigation may precede creation. No repository file writes may precede it, and product code still requires a finalized plan.
 
 Continue to step 3 only after worktree creation succeeds.
 
@@ -117,7 +117,7 @@ Continue to step 3 only after worktree creation succeeds.
 
 Write the plan directly after enough read-only investigation to understand the ticket. Keep private analysis as detailed as needed; keep the emitted plan extremely short.
 
-Write the plan content in Chinese because it will be uploaded to JIRA. Keep reviewer prompts, reviewer findings, aggregation, and user-facing plan status in English.
+Write the plan content in Chinese because it will be uploaded to JIRA. Keep self-check findings and user-facing plan status in English.
 
 **Required format**:
 - **3–7 flat bullets and normally no more than 15 non-empty lines**, including headings.
@@ -129,20 +129,13 @@ Write the plan content in Chinese because it will be uploaded to JIRA. Keep revi
 
 Complexity may justify more investigation, never a longer emitted plan. Exceed the line budget only when omitting a distinct acceptance requirement would make the plan incorrect; state that exception in one line.
 
-### 4. `/multi-agent-review-plan` Review Loop
+### 4. Self-Check The Brief Change Plan
 
-**Do not skip this.** After writing the plan, immediately call `/multi-agent-review-plan`. That skill sends the review prompt through Herdr to the existing adjacent Codex and Antigravity sessions for read-only review; do not launch a separate command-line or headless Codex process.
+Check the plan directly against `TARGET`'s description and acceptance criteria:
 
-- Collect all reviewer feedback.
-- Pass this **concise review contract** to every reviewer; it overrides that skill's normal report verbosity for this workflow:
-  - Check only for a contradiction, wrong direction, or missing requirement that would materially mislead implementation.
-  - Return `no actionable findings` or findings only. Write each finding as one sentence containing severity, the gap, and the affected acceptance requirement.
-  - Do not restate or summarize the plan, praise it, narrate the review round, propose a detailed fix, compare alternatives, list nits, or raise speculative scenarios.
-- Deduplicate and triage silently. Discard anything that is untraceable, implementation-shaped, speculative, or merely completeness-seeking; do not report discarded items individually.
-- Amend only actionable gaps, using the fewest words possible and staying within the step 3 budget, then review again.
-- Stop when a round returns no actionable findings. Report only the round count and final status; do not provide a round-by-round narrative.
-
-**Only after approval may you enter step 5.**
+- Correct only contradictions, wrong direction, or missing requirements that would materially mislead implementation.
+- Remove untraceable scope, implementation detail, speculative scenarios, and unnecessary content while staying within the step 3 budget.
+- Finalize the plan once no actionable gaps remain, then continue to step 5.
 
 ### 4.5 Split A Story-Scope Root Into Subtasks
 
@@ -159,19 +152,19 @@ If the conditions are not met, skip this step and continue directly to step 5.
 **Split happens BEFORE the subtask-scoped brief change plan is written**, not after. When the conditions are met, the flow is:
 
 1. **Skip the step 3 plan for now** — write a brief decomposition plan using the same format and budget, plus one bullet per proposed subtask. Hard ceiling: 20 non-empty lines. Include only the outcome, functional slices, dependency order, and acceptance point for each slice.
-2. Run `/multi-agent-review-plan` under the step 4 concise review contract.
-3. Once the decomposition plan is approved, use the `/jira` skill to create that number of subtasks under the `TARGET` project (issuetype is usually "Task" / "Sub-task", depending on project configuration; ask the user if unsure), and make each new task a subtask of `TARGET` or link it back to `TARGET` with `is blocked by`. For each subtask, write the summary and description in Chinese: describe the delivered functional slice in the summary and copy its relevant Chinese bullet into the description.
+2. Self-check the decomposition plan under step 4.
+3. Once the decomposition plan is finalized, use the `/jira` skill to create that number of subtasks under the `TARGET` project (issuetype is usually "Task" / "Sub-task", depending on project configuration; ask the user if unsure), and make each new task a subtask of `TARGET` or link it back to `TARGET` with `is blocked by`. For each subtask, write the summary and description in Chinese: describe the delivered functional slice in the summary and copy its relevant Chinese bullet into the description.
 4. Record the generated subtask key list as `SUBTASKS = [key1, key2, ...]`, ordered by dependency / implementation order.
 5. Add a comment to `TARGET` (the story / task): list all `SUBTASKS` and explain that they should be executed in order, one per run; this run will implement `SUBTASKS[0]` first, and the remaining subtasks should be handled by triggering this skill again later.
 6. Attach the decomposition plan to `TARGET` once for future linking.
 
-**Relock TARGET and write the subtask-1 plan**: after splitting, set `TARGET` to `SUBTASKS[0]`. Write and review a fresh brief change plan under steps 3–4 for this subtask only.
+**Relock TARGET and write the subtask-1 plan**: after splitting, set `TARGET` to `SUBTASKS[0]`. Write and self-check a fresh brief change plan under steps 3–4 for this subtask only.
 
 All "TARGET" references after this section (step 5 attachment, code, tests, review, commit, writeback) apply to this one subtask.
 
 Do not write back status to the story / parent task itself during this run. When the next run handles `SUBTASKS[1]`, the parent remains in the "split and waiting to be consumed one by one" state. After all subtasks are complete, if the user triggers this skill again with the parent key, step 2's DAG will determine there are no open upstream dependencies, and step 2.5 will detect that it is a "parent whose subtasks are all complete" -> use the **parent closeout shortcut** to close it, without running the code workflow again.
 
-### 5. Attach The Approved Plan To JIRA
+### 5. Attach The Finalized Plan To JIRA
 
 - Write the final plan to `${project_root_dir}/tmp/jira-plan-<TARGET>.md` (`TARGET` is the currently locked issue: in non-split scenarios it is the original root issue; in split scenarios it is `SUBTASKS[0]`).
 - Use the `/jira` skill to upload the file to the `TARGET` issue as an **attachment**.
@@ -180,7 +173,7 @@ Do not write back status to the story / parent task itself during this run. When
 
 ### 6. Write Product Code
 
-Implement the current `TARGET`'s approved outcome and acceptance scope. Decide all code-level details only now; do not retrofit them into the approved plan. Follow the six CLAUDE.md rules (especially Rule 2, minimal changes, and Rule 3, read before writing).
+Implement the current `TARGET`'s finalized outcome and acceptance scope. Decide all code-level details only now; do not retrofit them into the finalized plan. Follow the six CLAUDE.md rules (especially Rule 2, minimal changes, and Rule 3, read before writing).
 
 **If step 4.5 splitting happened**: the current `TARGET = SUBTASKS[0]`, and code changes must cover only its acceptance scope. Do not modify files / modules for other subtasks ahead of time, and do not include "while I was here" changes in this commit; doing so breaks the traceability where each JIRA subtask maps to one commit.
 
@@ -286,7 +279,7 @@ Tell the user:
 ## Anti-Patterns (Avoid)
 
 - Do not start coding immediately after receiving an issue. Without checking the DAG first, you may discover later that fixing an upstream issue would have resolved it.
-- Do not write a plan and implement without review. `/multi-agent-review-plan` is a hard gate, and it catches many design issues at the lowest cost.
+- Do not implement before finalizing the brief change plan under steps 3–4.
 - Do not turn the brief change plan or any review into a design document. Emit only decisions and actionable gaps; implementation detail belongs to implementation.
 - Do not paste the plan into a JIRA comment instead of an attachment. Long body text harms traceability; use an attachment.
 - Do not change product code without tests. Passing tests does not prove the feature is correct, and future regressions will have no guardrail.
@@ -296,7 +289,7 @@ Tell the user:
 - Do not invent a commit id, reuse an old one, or write a pre-rebase hash to JIRA. Fetch it live from the main checkout only after successful fast-forward integration in step 9.5.
 - Do not handle multiple issues or keep walking the DAG in one run. This skill handles one root node per run and stops after it is done.
 - Do not continue the workflow for an already Closed issue. Step 1 should stop it.
-- Do not skip splitting when a Story or a Story-scope Task / Epic has no subtasks and then implement 500+ lines after plan approval. That violates step 4.5; overly large granularity makes review and regression risk impossible to contain. Type == "Task" is NOT a get-out-of-splitting card — scope is what matters.
+- Do not skip splitting when a Story or a Story-scope Task / Epic has no subtasks and then implement 500+ lines after plan finalization. That violates step 4.5; overly large granularity makes review and regression risk impossible to contain. Type == "Task" is NOT a get-out-of-splitting card — scope is what matters.
 - Do not implement `SUBTASKS[0]`, `SUBTASKS[1]`, ... in one run after splitting. That violates the "one run handles only one issue" invariant; each run implements one subtask, and the rest wait for later triggers.
 - Do not casually transition the story to Resolved during the same run after splitting. Story status writeback is reserved for the later run where all subtasks are complete and step 2.5 uses the parent closeout shortcut.
 - Do not run the normal plan->code->review workflow when the user provides a parent whose subtasks are all complete. That violates step 2.5; parent tasks should not have independent implementation work, so only summary writeback and status transition are needed.
@@ -305,10 +298,10 @@ Tell the user:
 - Do not bundle multiple subtasks into one commit. Each JIRA subtask needs its own commit id for traceability, and mixed commits are hard to split later.
 - Do not trigger step 4.5 splitting for a root that already has subtasks / linked implementation tasks. Step 4.5 only applies to orphan roots (Story or Story-scope Task) with no subtasks and no downstream tasks; if subtasks already exist, use step 2's DAG logic and handle one open subtask.
 - Do not blindly rewrite a plan when the issue description / attachments already contain a sufficient approved plan. Condense and adopt it as described in step 3.
-- Do not skip `/multi-agent-review-plan` on a plan you wrote yourself just because "the issue also has an old plan attached". The step 3 skip is only for adopting the existing plan as-is; any plan you author or substantively edit must still pass the review gate.
+- Self-check any plan you author or substantively edit under step 4; the step 3 shortcut applies only when adopting an existing sufficient approved plan.
 - Do not create linked tasks or subtasks casually. Splitting is a heavy operation and must be justified by real inability to deliver as one commit; do not diverge into subtask creation over minor issues, and prefer keeping work whole when in doubt.
 - Do not let plans or reviews grow with hypothetical edge cases, speculative failure modes, peripheral concerns, or detailed remedies.
 - Do not treat reviewer consensus as proof that a finding is in scope. Multiple reviewers can be out of scope simultaneously; discard and move on rather than looping to appease them.
 - Do not accept an out-of-scope reviewer request in condensed form as a compromise. Partial adoption is still scope divergence; only the user can pull something back into scope.
-- Do not answer reviewer feedback by growing the plan when tightening or removing content resolves it, and do not add template sections.
+- Do not resolve self-check findings by growing the plan when tightening or removing content suffices, and do not add template sections.
 - Do not write narrative plans or review reports. Use terse bullets and omit everything that does not change the next action.
