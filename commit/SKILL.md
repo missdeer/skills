@@ -38,9 +38,16 @@ Understand the **exact scope** and **style template** for this commit before con
 ## Step 3 - Write The Message And Commit
 
 1. Use the environment's built-in file-editing tool to write or replace `./tmp/commit_message.txt` directly; do not delete it first or generate it with a heredoc / `echo`.
-2. Run:
+2. Set `gpg.program` for this commit on the command line according to the host OS: `gpg.exe` on Windows, `gpg` on non-Windows.
+
+   Windows:
    ```bash
-   git commit -F ./tmp/commit_message.txt
+   git -c gpg.program=gpg.exe commit -F ./tmp/commit_message.txt
+   ```
+
+   Non-Windows:
+   ```bash
+   git -c gpg.program=gpg commit -F ./tmp/commit_message.txt
    ```
 3. Run `git status` to confirm the commit succeeded.
 
